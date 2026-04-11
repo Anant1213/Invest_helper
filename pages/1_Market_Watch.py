@@ -1,0 +1,221 @@
+"""
+Market Watch — Candlestick charts, technical indicators, custom ETF cards.
+"""
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from backend.ui import apply_styles, page_header, section_header, etf_cards, ticker_tape, disclaimer, CHART_LAYOUT
+from backend.market import (
+    ALLOWLIST, PERIODS, INTERVALS, DEFAULT_PERIOD, DEFAULT_INTERVAL,
+    fetch_prices, compute_metrics, build_timeseries, corr_matrix,
+)
+from backend.data_catalog import CATALOG, DEFAULT_SELECTION
+from backend.indicators import rsi, bollinger_bands, macd
+
+st.set_page_config(page_title="Market Watch — AssetEra", page_icon="📈", layout="wide")
+apply_styles()
+
+# ── Load all tickers for tape ─────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def _tape_data():
+    p, _ = fetch_prices(sorted(ALLOWLIST), period="5d", interval="1d")
+    return compute_metrics(p)
+
+ticker_tape(_tape_data())
+page_header("Market Watch", "Candlestick charts · Technical indicators · Correlation heatmap", badge="DISK CACHE")
+
+# ── Sidebar ───────────────────────────────────────────────────────────
+st.sidebar.markdown("### Tickers")
+selected = []
+for grp, items in CATALOG.items():
+    filtered = {lbl: tkr for lbl, tkr in items.items() if tkr in ALLOWLIST}
+    if not filtered:
+        continue
+    st.sidebar.markdown(f"**{grp}**")
+    for lbl, tkr in filtered.items():
+        if st.sidebar.checkbox(lbl, value=(tkr in DEFAULT_SELECTION), key=f"mw_{tkr}"):
+            selected.append(tkr)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Settings")
+period   = st.sidebar.selectbox("Period",   PERIODS,   index=PERIODS.index(DEFAULT_PERIOD))
+interval = st.sidebar.selectbox("Interval", INTERVALS, index=INTERVALS.index(DEFAULT_INTERVAL))
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Chart Options")
+chart_ticker  = st.sidebar.selectbox("Candlestick ticker", options=selected if selected else ["SPY"])
+show_bb       = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
+show_rsi      = st.sidebar.checkbox("RSI (14)", value=True)
+show_macd     = st.sidebar.checkbox("MACD (12,26,9)", value=False)
+show_volume   = st.sidebar.checkbox("Volume", value=True)
+
+if not selected:
+    st.warning("Select at least one ticker from the sidebar.")
+    st.stop()
+
+# ── Fetch data ────────────────────────────────────────────────────────
+with st.spinner("Loading market data…"):
+    prices, errors = fetch_prices(selected, period=period, interval=interval)
+
+if prices.empty:
+    st.error("No data available.")
+    st.stop()
+
+metrics_df = compute_metrics(prices)
+
+# ── ETF summary cards ─────────────────────────────────────────────────
+section_header("Summary")
+etf_cards(metrics_df)
+
+# ── Chart tabs ────────────────────────────────────────────────────────
+tab_candle, tab_perf, tab_corr = st.tabs([
+    f"📊 Candlestick — {chart_ticker}",
+    "📈 Normalised Performance",
+    "🔥 Correlation Matrix",
+])
+
+# ── Tab 1: Candlestick ────────────────────────────────────────────────
+with tab_candle:
+    ticker_data = prices[prices["Ticker"] == chart_ticker].set_index("Date").sort_index()
+
+    if ticker_data.empty:
+        st.info(f"No OHLCV data for {chart_ticker}.")
+    else:
+        n_rows = 1 + int(show_rsi) + int(show_macd) + int(show_volume)
+        row_heights = [0.55]
+        specs = [[{"secondary_y": False}]]
+        if show_rsi:
+            row_heights.append(0.18); specs.append([{"secondary_y": False}])
+        if show_macd:
+            row_heights.append(0.18); specs.append([{"secondary_y": False}])
+        if show_volume:
+            row_heights.append(0.14); specs.append([{"secondary_y": False}])
+
+        fig = make_subplots(rows=n_rows, cols=1, shared_xaxes=True,
+                            vertical_spacing=0.04, row_heights=row_heights,
+                            subplot_titles=[""] * n_rows)
+
+        fig.add_trace(go.Candlestick(
+            x=ticker_data.index,
+            open=ticker_data["Open"], high=ticker_data["High"],
+            low=ticker_data["Low"],  close=ticker_data["Close"],
+            name=chart_ticker,
+            increasing_line_color="#00C896", increasing_fillcolor="rgba(0,200,150,.7)",
+            decreasing_line_color="#FF3560", decreasing_fillcolor="rgba(255,53,96,.7)",
+            showlegend=False,
+        ), row=1, col=1)
+
+        if show_bb:
+            upper, mid, lower = bollinger_bands(ticker_data["Close"])
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=upper, name="BB Upper",
+                line=dict(color="rgba(41,98,255,.5)", width=1, dash="dot"), showlegend=True), row=1, col=1)
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=mid, name="BB Mid (20MA)",
+                line=dict(color="rgba(255,176,32,.6)", width=1), showlegend=True), row=1, col=1)
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=lower, name="BB Lower",
+                line=dict(color="rgba(41,98,255,.5)", width=1, dash="dot"),
+                fill="tonexty", fillcolor="rgba(41,98,255,.03)", showlegend=True), row=1, col=1)
+
+        cur_row = 2
+        if show_rsi:
+            rsi_vals = rsi(ticker_data["Close"])
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=rsi_vals, name="RSI",
+                line=dict(color="#FFB020", width=1.5), showlegend=False), row=cur_row, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,53,96,.4)",
+                          annotation_text="OB 70", annotation_position="right", row=cur_row, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="rgba(0,200,150,.4)",
+                          annotation_text="OS 30", annotation_position="right", row=cur_row, col=1)
+            fig.add_hrect(y0=70, y1=100, fillcolor="rgba(255,53,96,.04)", line_width=0, row=cur_row, col=1)
+            fig.add_hrect(y0=0,  y1=30,  fillcolor="rgba(0,200,150,.04)", line_width=0, row=cur_row, col=1)
+            fig.update_yaxes(range=[0, 100], row=cur_row, col=1)
+            cur_row += 1
+
+        if show_macd:
+            m_line, s_line, hist = macd(ticker_data["Close"])
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=m_line, name="MACD",
+                line=dict(color="#2962FF", width=1.5), showlegend=False), row=cur_row, col=1)
+            fig.add_trace(go.Scatter(x=ticker_data.index, y=s_line, name="Signal",
+                line=dict(color="#FFB020", width=1.2), showlegend=False), row=cur_row, col=1)
+            colors = ["#00C896" if v >= 0 else "#FF3560" for v in hist.fillna(0)]
+            fig.add_trace(go.Bar(x=ticker_data.index, y=hist, marker_color=colors,
+                name="Histogram", showlegend=False, opacity=0.7), row=cur_row, col=1)
+            cur_row += 1
+
+        if show_volume:
+            vol_colors = ["#00C896" if c >= o else "#FF3560"
+                          for c, o in zip(ticker_data["Close"], ticker_data["Open"])]
+            fig.add_trace(go.Bar(x=ticker_data.index, y=ticker_data["Volume"],
+                marker_color=vol_colors, name="Volume", showlegend=False, opacity=0.7),
+                row=cur_row, col=1)
+
+        layout = dict(**CHART_LAYOUT)
+        layout["height"] = 180 + 220 * n_rows
+        layout["xaxis_rangeslider_visible"] = False
+        layout["margin"] = dict(l=55, r=20, t=20, b=40)
+        fig.update_layout(**layout)
+        fig.update_xaxes(showgrid=True, gridcolor="#1A2840")
+        fig.update_yaxes(showgrid=True, gridcolor="#1A2840")
+        st.plotly_chart(fig, width='stretch')
+
+# ── Tab 2: Normalised Performance ────────────────────────────────────
+with tab_perf:
+    ts = build_timeseries(prices, selected)
+    if ts.empty:
+        st.info("No data to display.")
+    else:
+        palette = ["#2962FF","#00C896","#FFB020","#FF3560","#A78BFA",
+                   "#F59E0B","#10B981","#EF4444","#3B82F6","#EC4899",
+                   "#14B8A6","#F97316","#6366F1"]
+        fig_line = go.Figure()
+        for i, col in enumerate(ts.columns):
+            fig_line.add_trace(go.Scatter(
+                x=ts.index, y=ts[col], mode="lines", name=col,
+                line=dict(color=palette[i % len(palette)], width=2),
+            ))
+        layout = dict(**CHART_LAYOUT)
+        layout.update(height=480, margin=dict(l=55, r=20, t=30, b=60),
+                      legend=dict(orientation="h", y=-0.15))
+        fig_line.update_layout(**layout)
+        fig_line.update_yaxes(title_text="Index (Start = 100)")
+        st.plotly_chart(fig_line, width='stretch')
+
+# ── Tab 3: Correlation Matrix ─────────────────────────────────────────
+with tab_corr:
+    if len(selected) < 2:
+        st.info("Select at least 2 tickers to display the correlation matrix.")
+    elif len(selected) > 20:
+        st.info("Select ≤ 20 tickers to display the correlation heatmap.")
+    else:
+        cm = corr_matrix(prices, selected)
+        if cm is not None and not cm.empty:
+            tl = cm.columns.tolist()
+            zv = cm.fillna(0).round(3).values.tolist()
+            fig_heat = go.Figure(go.Heatmap(
+                z=zv, x=tl, y=tl,
+                colorscale="RdBu", reversescale=True, zmin=-1, zmax=1,
+                text=[[f"{v:.2f}" for v in row] for row in zv],
+                texttemplate="%{text}",
+                hovertemplate="%{x} · %{y}: %{z:.3f}<extra></extra>",
+            ))
+            layout = dict(**CHART_LAYOUT)
+            layout.update(height=max(400, len(tl) * 34 + 80),
+                          margin=dict(l=80, r=20, t=30, b=80))
+            fig_heat.update_layout(**layout)
+            fig_heat.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig_heat, width='stretch')
+
+# ── Downloads ─────────────────────────────────────────────────────────
+section_header("Export")
+d1, d2 = st.columns(2)
+with d1:
+    if not metrics_df.empty:
+        st.download_button("Summary CSV", metrics_df.to_csv(index=False),
+                           f"summary_{period}_{interval}.csv", "text/csv")
+with d2:
+    if not prices.empty:
+        st.download_button("Timeseries CSV", prices.to_csv(index=False),
+                           f"timeseries_{period}_{interval}.csv", "text/csv")
+
+disclaimer()
