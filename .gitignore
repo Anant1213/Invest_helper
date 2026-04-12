@@ -1,0 +1,27 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Model (large binary — regenerated on first run if missing)
+models/risk_model.pkl
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+.claude/

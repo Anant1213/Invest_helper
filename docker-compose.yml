@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL}
+    restart: unless-stopped

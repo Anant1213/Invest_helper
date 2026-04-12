@@ -1,0 +1,10 @@
+streamlit>=1.38.0
+pandas>=2.2.0
+numpy>=1.26.0
+plotly>=5.23.0
+yfinance>=0.2.43
+scikit-learn>=1.5.0
+openai>=1.30.0
+python-dotenv>=1.0.0
+requests>=2.32.0
+psycopg[binary]>=3.2.0
