@@ -6,7 +6,7 @@ AssetEra is a multi-page Streamlit portfolio intelligence platform that combines
 - ML-based investor risk profiling,
 - and an OpenAI-powered portfolio Q&A assistant.
 
-The app is designed to run fast with local CSV market cache files, while still auto-refreshing stale data incrementally from Yahoo Finance.
+The app supports a PostgreSQL-backed market data layer for production, with scheduled daily sync from Yahoo Finance.
 
 ## Table of Contents
 - [Architecture](#architecture)
@@ -36,6 +36,7 @@ flowchart LR
 
   subgraph B[Backend Modules]
     M[backend/market.py\nFetch + cache + metrics]
+    PG[backend/postgres_store.py\nPostgreSQL adapter]
     I[backend/indicators.py\nTech + risk functions]
     R[backend/risk_model.py\nGBT risk model + fund mapping]
     AI[backend/ai_advisor.py\nPrompt + streaming wrapper]
@@ -43,8 +44,9 @@ flowchart LR
     DC[backend/data_catalog.py\nTicker catalog]
   end
 
-  subgraph L[Local Artifacts]
-    C[data_cache/*.csv]
+  subgraph L[Data Stores]
+    DB[(PostgreSQL\nmarket_prices)]
+    C[data_cache/*.csv\noptional one-time import]
     PM[models/risk_model.pkl]
   end
 
@@ -55,7 +57,9 @@ flowchart LR
 
   U --> S
   S --> B
-  M <--> C
+  M <--> DB
+  C --> PG
+  M --> PG
   M --> YF
   R <--> PM
   AI --> OAI
@@ -67,18 +71,18 @@ flowchart LR
 sequenceDiagram
   participant UI as Streamlit Page
   participant MK as backend.market.fetch_prices
-  participant CSV as data_cache CSV
+  participant DB as PostgreSQL market_prices
   participant YF as yfinance
 
   UI->>MK: fetch_prices(tickers, period, interval)
-  MK->>CSV: read cached 1d OHLCV
+  MK->>DB: read cached 1d OHLCV
   MK->>MK: check last cached business day
   alt cache is stale
     MK->>YF: download missing date range only
     YF-->>MK: new rows
-    MK->>CSV: append + dedupe + save
+    MK->>DB: upsert deduped rows
   else cache is fresh
-    MK-->>MK: reuse local data
+    MK-->>MK: reuse DB data
   end
   MK->>MK: optional 1d->1wk/1mo resample
   MK->>MK: trim by period
@@ -111,6 +115,7 @@ flowchart TD
 │   ├── data_catalog.py
 │   ├── indicators.py
 │   ├── market.py
+│   ├── postgres_store.py
 │   ├── risk_model.py
 │   └── ui.py
 ├── pages/
@@ -118,6 +123,9 @@ flowchart TD
 │   ├── 2_Fund_Backtester.py
 │   ├── 3_Risk_Profiler.py
 │   └── 4_AI_Advisor.py
+├── scripts/
+│   ├── load_data_to_postgres.py
+│   └── daily_market_sync.py
 ├── data_cache/
 ├── models/
 ├── requirements.txt
@@ -130,7 +138,8 @@ flowchart TD
 | Module | Responsibility |
 |---|---|
 | `app.py` | Landing page, ticker tape, feature cards, navigation to all pages. |
-| `backend/market.py` | Allowlisted ticker validation, disk + in-memory cache, incremental yfinance updates, period trimming, metrics/correlation helpers. |
+| `backend/market.py` | Allowlisted ticker validation, PostgreSQL-first caching, incremental yfinance updates, period trimming, metrics/correlation helpers. |
+| `backend/postgres_store.py` | PostgreSQL connection/schema setup, ticker reads, upserts, and CSV import helpers. |
 | `backend/indicators.py` | RSI, Bollinger Bands, MACD, ATR, drawdown, beta/alpha, Sortino/Calmar, Monte Carlo GBM utilities. |
 | `backend/risk_model.py` | Synthetic training data generation, Gradient Boosting model persistence, risk prediction, fund recommendation mapping. |
 | `backend/ai_advisor.py` | Fund-aware system prompt construction and streaming OpenAI chat response wrapper. |
@@ -223,6 +232,25 @@ Set at least:
 
 ```env
 OPENAI_API_KEY=sk-proj-...
+POSTGRES_URL=postgresql://user:password@your-host:5432/assetera?sslmode=require
+```
+
+### Optional one-time CSV import (bootstrap only)
+
+```bash
+python scripts/load_data_to_postgres.py --dir data_cache --pattern "*_1d.csv"
+```
+
+### Daily batch sync to PostgreSQL
+
+```bash
+python scripts/daily_market_sync.py --strict
+```
+
+Example cron (UTC 23:00 daily):
+
+```bash
+0 23 * * * cd /path/to/assetera && /usr/bin/env python3 scripts/daily_market_sync.py --strict >> /var/log/assetera_sync.log 2>&1
 ```
 
 ### Start app
@@ -240,21 +268,25 @@ docker compose up --build
 ```
 
 Notes:
+- Uses remote PostgreSQL from `POSTGRES_URL` in `.env`.
+- Ensure `POSTGRES_URL` is set before running compose.
 - Port mapping: `8501:8501`
-- `data_cache` is mounted read-only inside container (`./data_cache:/app/data_cache:ro`)
 - Environment variables are loaded from `.env`
 
 ## Environment Variables
 
 Current `.env.example` includes:
 - `OPENAI_API_KEY` (required for AI Advisor)
-- commented Snowflake placeholders (not currently used by the active Streamlit code path)
+- `POSTGRES_URL`/`DATABASE_URL` (required for PostgreSQL-backed market store)
+- commented Snowflake placeholders (legacy workflow only)
 
 ## Data and Model Artifacts
 
 - `data_cache/*.csv`
-  - Per-ticker historical OHLCV files used for fast startup and offline resilience.
-  - Incrementally updated when stale.
+  - Optional bootstrap source for first import.
+- `market_prices` (PostgreSQL table)
+  - Canonical OHLCV store used by `backend/market.py` when `POSTGRES_URL` is set.
+  - Incrementally upserted when stale via yfinance.
 - `models/risk_model.pkl`
   - Persisted ML model for risk profiling.
   - Rebuilt automatically if missing.
@@ -268,9 +300,15 @@ Current `.env.example` includes:
   - Verify selected tickers are in allowlist and date window has overlap.
   - Check internet connectivity if local cache is missing and refresh is needed.
 
+- PostgreSQL errors:
+  - Verify `POSTGRES_URL` in `.env`.
+  - Ensure the DB is reachable and credentials are valid.
+  - Run daily sync using `python scripts/daily_market_sync.py --strict`.
+  - If using Supabase shared pooler and you see `prepared statement "_pg3_0" already exists`, ensure psycopg prepared statements are disabled (already configured in `backend/postgres_store.py`).
+
 - First run feels slow:
-  - Initial model training and/or first-time yfinance refresh can add startup latency.
-  - Subsequent runs are faster due to `st.cache_data`, `st.cache_resource`, and disk cache.
+  - Initial model training and/or first sync can add startup latency.
+  - Subsequent runs are faster due to `st.cache_data`, `st.cache_resource`, and DB/cache reuse.
 
 ## Disclaimer
 

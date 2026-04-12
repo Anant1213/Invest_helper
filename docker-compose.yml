@@ -5,6 +5,6 @@ services:
       - "8501:8501"
     env_file:
       - .env
-    volumes:
-      - ./data_cache:/app/data_cache:ro
+    environment:
+      POSTGRES_URL: ${POSTGRES_URL}
     restart: unless-stopped
