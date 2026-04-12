@@ -1,16 +1,18 @@
 """
-Market data layer — disk-cached OHLCV with smart incremental yfinance updates.
+Market data layer — PostgreSQL-backed OHLCV with smart incremental yfinance
+updates (CSV mode only when PostgreSQL is not configured).
 
 Strategy:
-  1. Read base data from CSV (fast, always works offline)
+  1. Read base data from PostgreSQL when configured (POSTGRES_URL/DATABASE_URL).
+     If PostgreSQL is not configured, use local CSV cache mode.
   2. Check if data is stale (last date < today - 1 business day)
-  3. If stale: fetch only the missing date range via yfinance, append to CSV
+  3. If stale: fetch only the missing date range via yfinance and upsert into
+     PostgreSQL (or append to CSV in local mode)
   4. Fall back gracefully if yfinance is unavailable
 
 This means data is always current without full re-downloads.
 """
 
-import os
 import time
 import logging
 from pathlib import Path
@@ -20,6 +22,12 @@ from datetime import date, timedelta
 import pandas as pd
 import numpy as np
 import yfinance as yf
+
+from backend.postgres_store import (
+    is_enabled as postgres_enabled,
+    read_ticker_prices as read_postgres_ticker,
+    upsert_prices as upsert_postgres_prices,
+)
 
 # ── Config ────────────────────────────────────────────────────────────
 DEFAULT_PERIOD   = "2y"
@@ -56,6 +64,9 @@ for _n in ("yfinance", "urllib3", "requests", "peewee"):
     logging.getLogger(_n).setLevel(logging.CRITICAL)
 
 logger = logging.getLogger(__name__)
+_USE_POSTGRES = postgres_enabled()
+if _USE_POSTGRES:
+    logger.info("Market store: PostgreSQL mode enabled")
 
 # ── In-memory cache ───────────────────────────────────────────────────
 _mem_cache: Dict[Tuple, Tuple[float, pd.DataFrame, Dict]] = {}
@@ -130,8 +141,37 @@ def _read_disk(ticker: str) -> Optional[pd.DataFrame]:
         return None
 
 
+def _persist_cache(ticker: str, df: pd.DataFrame) -> None:
+    """Persist canonical daily data to PostgreSQL (if enabled) or CSV local mode."""
+    if df is None or df.empty:
+        return
+    _coerce_naive_utc_inplace(df)
+
+    if _USE_POSTGRES:
+        ok = upsert_postgres_prices(df)
+        if ok:
+            return
+        logger.warning("PostgreSQL write failed for %s; data not persisted", ticker)
+        return
+
+    path = _cache_path(ticker, "1d")
+    df.to_csv(path, index=False)
+
+
+def _read_base_cache(ticker: str) -> Optional[pd.DataFrame]:
+    """
+    Read base daily data.
+    In PostgreSQL mode, runtime reads come only from DB.
+    In local mode, reads come from CSV cache.
+    """
+    if _USE_POSTGRES:
+        return read_postgres_ticker(ticker)
+
+    return _read_disk(ticker)
+
+
 def _append_and_save(ticker: str, existing: pd.DataFrame, new_rows: pd.DataFrame) -> pd.DataFrame:
-    """Merge new rows into existing df, dedup, save to CSV."""
+    """Merge new rows into existing df, dedup, and persist to configured store."""
     combined = pd.concat([existing, new_rows], ignore_index=True)
     _coerce_naive_utc_inplace(combined)
     combined = (
@@ -140,8 +180,7 @@ def _append_and_save(ticker: str, existing: pd.DataFrame, new_rows: pd.DataFrame
         .sort_values("Date")
         .reset_index(drop=True)
     )
-    path = _cache_path(ticker, "1d")
-    combined.to_csv(path, index=False)
+    _persist_cache(ticker, combined)
     return combined
 
 
@@ -189,18 +228,20 @@ def _fetch_yfinance(ticker: str, start: date, end: date) -> Optional[pd.DataFram
 # ── Smart cache update ────────────────────────────────────────────────
 def _ensure_fresh(ticker: str) -> Optional[pd.DataFrame]:
     """
-    Load disk data, check staleness, fetch missing days if needed.
+    Load cached data, check staleness, fetch missing days if needed.
     Always returns the best available data.
     """
-    existing = _read_disk(ticker)
+    existing = _read_base_cache(ticker)
     if existing is None or existing.empty:
-        # No disk data at all — try full fetch
-        logger.info("No disk cache for %s — fetching full history", ticker)
+        # No cache at all — try full fetch
+        if _USE_POSTGRES:
+            logger.info("No PostgreSQL data for %s — fetching full history", ticker)
+        else:
+            logger.info("No local cache for %s — fetching full history", ticker)
         new_data = _fetch_yfinance(ticker, date(2005, 1, 1), date.today())
         if new_data is not None and not new_data.empty:
             new_data["Ticker"] = ticker
-            path = _cache_path(ticker, "1d")
-            new_data.to_csv(path, index=False)
+            _persist_cache(ticker, new_data)
             return new_data
         return None
 

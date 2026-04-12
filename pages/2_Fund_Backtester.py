@@ -56,7 +56,7 @@ def _years(d0, d1): return max((d1-d0).days,0)/365.25
 
 @st.cache_data(show_spinner=False, ttl=300)
 def _fetch(tickers: tuple, start: date, end: date) -> pd.DataFrame:
-    """Load prices from local disk cache (fast, offline-capable)."""
+    """Load prices from configured market store (PostgreSQL/CSV fallback)."""
     prices, _ = fetch_prices(list(tickers), period="max", interval="1d")
     if prices.empty:
         return pd.DataFrame()
@@ -131,33 +131,106 @@ ticker_tape(_tape())
 
 page_header("Fund Backtester", "Historical simulation · Institutional risk metrics", badge="LIVE DATA")
 
-# ── Sidebar ───────────────────────────────────────────────────────────
-st.sidebar.markdown("### Fund")
-fund_id=st.sidebar.selectbox("Select Fund",list(FUNDS.keys()),format_func=lambda k:f"{k} — {FUNDS[k]['name']}")
+# ── Front-page configuration ──────────────────────────────────────────
+section_header("Backtest Control Center")
 
-st.sidebar.markdown("### Date Range")
-today=date.today()
-start_date=st.sidebar.date_input("Start",value=date(today.year-10,today.month,today.day),max_value=today)
-end_date  =st.sidebar.date_input("End",  value=today,max_value=today)
-if isinstance(start_date,tuple): start_date=start_date[0]
-if isinstance(end_date,tuple):   end_date  =end_date[0]
-end_date=_clamp(end_date)
-if start_date>=end_date: st.sidebar.warning("Start must be before End.")
+today = date.today()
+default_start = today - timedelta(days=365 * 10)
 
-st.sidebar.markdown("### Parameters")
-start_amount=st.sidebar.number_input("Starting Amount ($)",min_value=1000.0,value=100000.0,step=5000.0)
-currency=st.sidebar.selectbox("Currency",["USD","INR"],index=0)
-rebalance=st.sidebar.selectbox("Rebalance",["Annual","None"],index=0)
-fee_on=st.sidebar.checkbox("Apply annual fee (TER)",value=True)
-fee_val=st.sidebar.number_input("Annual fee",min_value=0.0,max_value=0.05,value=FUNDS[fund_id]["default_fee"],step=0.0005,format="%.4f")
-rf_rate=st.sidebar.number_input("Risk-free rate (Sharpe/Sortino)",min_value=0.0,max_value=0.15,value=0.04,step=0.005,format="%.3f")
+st.markdown(
+    """
+    <div style="
+      background:linear-gradient(135deg, rgba(41,98,255,.14), rgba(0,200,150,.06));
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:14px 16px;
+      margin-bottom:12px;
+      color:var(--text-2);
+      font-size:.86rem;
+      line-height:1.6;">
+      Configure your strategy here, then run the backtest from this panel.
+      No sidebar setup needed.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.sidebar.markdown("### Benchmarks (max 3)")
-bench_sel=st.sidebar.multiselect("Compare vs",list(BENCHMARKS.keys()),default=["SPY","60/40","GLD"])
-if len(bench_sel)>3: bench_sel=bench_sel[:3]
+with st.form("bt_front_config"):
+    c1, c2, c3 = st.columns([1.25, 1.05, 1.15])
 
-if st.sidebar.button("Clear cache"): st.cache_data.clear(); st.sidebar.success("Cleared.")
-run=st.sidebar.button("▶  Run Backtest",type="primary")
+    with c1:
+        st.markdown("**Strategy & Benchmarks**")
+        fund_id = st.selectbox(
+            "Fund",
+            list(FUNDS.keys()),
+            format_func=lambda k: f"{k} — {FUNDS[k]['name']}",
+        )
+        bench_sel = st.multiselect(
+            "Benchmarks (max 3)",
+            list(BENCHMARKS.keys()),
+            default=["SPY", "60/40", "GLD"],
+            max_selections=3,
+        )
+        fmeta = FUNDS[fund_id]
+        st.markdown(
+            f'<div style="margin-top:8px;padding:10px 12px;background:var(--bg-card);'
+            f'border:1px solid var(--border);border-radius:10px;font-size:.8rem;color:var(--text-2);">'
+            f'<b style="color:var(--text);">{fmeta["name"]}</b><br>'
+            f'Risk Level: <span style="color:var(--accent);font-family:var(--mono);">{fmeta["risk"]}/5</span> · '
+            f'Holdings: <span style="color:var(--text);font-family:var(--mono);">{len(fmeta["allocations"])}</span> · '
+            f'Default TER: <span style="color:var(--text);font-family:var(--mono);">{fmeta["default_fee"]:.2%}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    with c2:
+        st.markdown("**Date Window**")
+        start_date = st.date_input("Start Date", value=default_start, max_value=today)
+        end_date = st.date_input("End Date", value=today, max_value=today)
+        rebalance = st.selectbox("Rebalance", ["Annual", "None"], index=0)
+
+    with c3:
+        st.markdown("**Capital & Risk Inputs**")
+        start_amount = st.number_input("Starting Amount ($)", min_value=1000.0, value=100000.0, step=5000.0)
+        currency = st.selectbox("Currency", ["USD", "INR"], index=0)
+        fee_on = st.checkbox("Apply annual fee (TER)", value=True)
+        fee_val = st.number_input(
+            "Annual fee",
+            min_value=0.0,
+            max_value=0.05,
+            value=float(FUNDS[fund_id]["default_fee"]),
+            step=0.0005,
+            format="%.4f",
+            disabled=not fee_on,
+        )
+        rf_rate = st.number_input(
+            "Risk-free rate (Sharpe/Sortino)",
+            min_value=0.0,
+            max_value=0.15,
+            value=0.04,
+            step=0.005,
+            format="%.3f",
+        )
+
+    a1, a2 = st.columns([1.8, 1.0])
+    with a1:
+        run = st.form_submit_button("▶ Run Backtest", type="primary", use_container_width=True)
+    with a2:
+        clear_cache = st.form_submit_button("Clear Cache", use_container_width=True)
+
+if isinstance(start_date, tuple):
+    start_date = start_date[0]
+if isinstance(end_date, tuple):
+    end_date = end_date[0]
+
+end_date = _clamp(end_date)
+if clear_cache:
+    st.cache_data.clear()
+    st.success("Data cache cleared.")
+
+if start_date >= end_date:
+    st.error("Start date must be before end date.")
+    run = False
 
 # ── Main ──────────────────────────────────────────────────────────────
 if run:
@@ -348,6 +421,6 @@ if run:
         )
 
 else:
-    st.info("Configure your backtest in the sidebar and click **Run Backtest**.")
+    st.info("Set your inputs in the Backtest Control Center above, then click **Run Backtest**.")
 
 disclaimer("Past performance is not indicative of future results. Zero slippage / commission assumed.")
