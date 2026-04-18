@@ -10,7 +10,7 @@ load_dotenv()
 
 from backend.ui import apply_styles, page_header, section_header, ticker_tape, disclaimer, CHART_LAYOUT
 from backend.market import fetch_prices, compute_metrics, ALLOWLIST
-from backend.ai_advisor import get_system_prompt, stream_response
+from backend.ai_advisor.advisor import get_system_prompt, stream_response
 
 st.set_page_config(page_title="AI Advisor — AssetEra", page_icon="🤖", layout="wide")
 apply_styles()

@@ -1,5 +1,5 @@
 """
-analytics.pipeline
+backend.stock_research.analytics.pipeline
 ──────────────────
 Orchestrates the full analytics computation across all modules and markets.
 
@@ -19,7 +19,7 @@ import logging
 import time
 from typing import Sequence
 
-from analytics import returns, risk, momentum, zscore, technical
+from backend.stock_research.analytics import returns, risk, momentum, zscore, technical
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ MODULES = {
     "technical": technical,
 }
 
-MARKETS = ["US", "NSE"]
+MARKETS = ["US", "US_EQ"]   # US = ETFs/fund stocks, US_EQ = individual equities by cap
 
 
 def run(

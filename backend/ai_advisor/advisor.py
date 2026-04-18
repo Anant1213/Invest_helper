@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Generator
 
-from backend.risk_model import FUND_PROFILES, RISK_LABELS
+from backend.risk_profiler.risk_model import FUND_PROFILES, RISK_LABELS
 
 SYSTEM_PROMPT = """You are AssetEra AI Advisor, an expert financial assistant built into the AssetEra portfolio management platform.
 

@@ -28,7 +28,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 
-from backend.postgres_store import (
+from backend.db.postgres_store import (
     is_enabled,
     postgres_url,
     upsert_nse_prices,

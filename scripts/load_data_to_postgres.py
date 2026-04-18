@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.postgres_store import (  # noqa: E402
+from backend.db.postgres_store import (  # noqa: E402
     is_enabled,
     load_csv_file,
     postgres_url,

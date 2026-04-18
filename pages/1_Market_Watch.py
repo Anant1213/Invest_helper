@@ -12,7 +12,7 @@ from backend.market import (
     ALLOWLIST, PERIODS, INTERVALS, DEFAULT_PERIOD, DEFAULT_INTERVAL,
     fetch_prices, compute_metrics, build_timeseries, corr_matrix,
 )
-from backend.data_catalog import CATALOG, DEFAULT_SELECTION
+from backend.market_watch.data_catalog import CATALOG, DEFAULT_SELECTION
 from backend.indicators import rsi, bollinger_bands, macd
 
 st.set_page_config(page_title="Market Watch — AssetEra", page_icon="📈", layout="wide")

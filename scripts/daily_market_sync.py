@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.market import ALLOWLIST, fetch_prices
-from backend.postgres_store import is_enabled, postgres_url
+from backend.db.postgres_store import is_enabled, postgres_url
 
 
 def parse_args() -> argparse.Namespace:

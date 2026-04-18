@@ -42,12 +42,12 @@ st.markdown(
       </p>
       <div class="ae-hero-stats">
         <div>
-          <div class="ae-stat-n">13</div>
-          <div class="ae-stat-l">ETFs Tracked</div>
+          <div class="ae-stat-n">150</div>
+          <div class="ae-stat-l">US Equities</div>
         </div>
         <div>
-          <div class="ae-stat-n">5</div>
-          <div class="ae-stat-l">Model Funds</div>
+          <div class="ae-stat-n">13+</div>
+          <div class="ae-stat-l">ETFs &amp; Funds</div>
         </div>
         <div>
           <div class="ae-stat-n">1,000+</div>
@@ -64,7 +64,7 @@ st.markdown(
 )
 
 # ── Feature cards ─────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     st.markdown(
@@ -138,6 +138,46 @@ with c4:
     )
     if st.button("Open AI Advisor →", key="btn_ai", width='stretch'):
         st.switch_page("pages/4_AI_Advisor.py")
+
+with c5:
+    st.markdown(
+        """
+        <div class="ae-feat">
+          <div class="ae-feat-icon">🔭</div>
+          <div class="ae-feat-title">Stock Research</div>
+          <div class="ae-feat-desc">
+            Screener with 20+ filters, deep-dive candlestick charts with RSI/MACD/BB,
+            and side-by-side comparison with radar charts. 150 US equities (large/mid/small cap).
+          </div>
+          <span class="ae-feat-tag">Live DB · 10yr History</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Open Stock Research →", key="btn_res", width='stretch'):
+        st.switch_page("pages/5_Research.py")
+
+# ── Row 2: Data Workbench ──────────────────────────────────────────────
+st.markdown("<br>", unsafe_allow_html=True)
+dw1, dw2, dw3 = st.columns([1, 2, 1])
+with dw2:
+    st.markdown(
+        """
+        <div class="ae-feat">
+          <div class="ae-feat-icon">🧠</div>
+          <div class="ae-feat-title">Data Workbench</div>
+          <div class="ae-feat-desc">
+            Upload any CSV, Excel, JSON or Parquet file.
+            Get instant profiling, data quality alerts, 8+ auto-generated charts,
+            and AI-powered insights. Ask questions about your data in plain English.
+          </div>
+          <span class="ae-feat-tag">S3 · DuckDB · GPT-4o-mini</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("Open Data Workbench →", key="btn_dw", width='stretch'):
+        st.switch_page("pages/6_Data_Workbench.py")
 
 # ── Quick market snapshot ─────────────────────────────────────────────
 if tape_df is not None and not tape_df.empty:

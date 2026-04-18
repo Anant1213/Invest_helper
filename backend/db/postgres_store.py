@@ -2,8 +2,9 @@
 PostgreSQL storage adapter for market OHLCV data.
 
 Tables:
-  us_prices  — US ETFs and fund constituent stocks (formerly market_prices)
-  nse_prices — NSE India equities (large / mid / small cap)
+  us_prices        — US ETFs and fund constituent stocks
+  us_equity_prices — US individual equities by market-cap category
+                     (50 large / 50 mid / 50 small cap, NYSE/NASDAQ)
 
 Set either POSTGRES_URL or DATABASE_URL to enable DB storage.
 """
@@ -71,9 +72,9 @@ WHERE ticker = %s
 ORDER BY date ASC;
 """
 
-# ── NSE prices (Indian equities) ──────────────────────────────────────
-_NSE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS nse_prices (
+# ── US equity prices (individual stocks by market-cap category) ────────
+_EQUITY_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS us_equity_prices (
     ticker TEXT NOT NULL,
     date TIMESTAMP NOT NULL,
     open DOUBLE PRECISION,
@@ -87,8 +88,8 @@ CREATE TABLE IF NOT EXISTS nse_prices (
 );
 """
 
-_NSE_UPSERT_SQL = """
-INSERT INTO nse_prices (
+_EQUITY_UPSERT_SQL = """
+INSERT INTO us_equity_prices (
     ticker, date, open, high, low, close, adj_close, volume, cap_category
 )
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -102,7 +103,7 @@ ON CONFLICT (ticker, date) DO UPDATE SET
     cap_category = EXCLUDED.cap_category;
 """
 
-_NSE_SELECT_SQL = """
+_EQUITY_SELECT_SQL = """
 SELECT
     date AS "Date",
     ticker AS "Ticker",
@@ -113,12 +114,12 @@ SELECT
     adj_close AS "Adj Close",
     volume AS "Volume",
     cap_category AS "CapCategory"
-FROM nse_prices
+FROM us_equity_prices
 WHERE ticker = %s
 ORDER BY date ASC;
 """
 
-_NSE_SELECT_ALL_SQL = """
+_EQUITY_SELECT_ALL_SQL = """
 SELECT
     date AS "Date",
     ticker AS "Ticker",
@@ -129,13 +130,13 @@ SELECT
     adj_close AS "Adj Close",
     volume AS "Volume",
     cap_category AS "CapCategory"
-FROM nse_prices
+FROM us_equity_prices
 {where_clause}
 ORDER BY ticker, date ASC;
 """
 
 _schema_ready = False
-_nse_schema_ready = False
+_equity_schema_ready = False
 
 
 def postgres_url() -> str:
@@ -178,22 +179,22 @@ def _ensure_schema() -> bool:
         return False
 
 
-def _ensure_nse_schema() -> bool:
-    """Ensure nse_prices table exists."""
-    global _nse_schema_ready
+def _ensure_equity_schema() -> bool:
+    """Ensure us_equity_prices table exists."""
+    global _equity_schema_ready
 
-    if _nse_schema_ready:
+    if _equity_schema_ready:
         return True
 
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_NSE_SCHEMA_SQL)
+                cur.execute(_EQUITY_SCHEMA_SQL)
             conn.commit()
-        _nse_schema_ready = True
+        _equity_schema_ready = True
         return True
     except Exception as e:
-        logger.warning("PostgreSQL nse_prices schema init failed: %s", e)
+        logger.warning("PostgreSQL us_equity_prices schema init failed: %s", e)
         return False
 
 
@@ -310,13 +311,13 @@ def load_csv_file(path: Path) -> tuple[bool, int]:
         return False, 0
 
 
-# ── NSE prices API ────────────────────────────────────────────────────
+# ── US equity prices API ──────────────────────────────────────────────
 
-def upsert_nse_prices(df: pd.DataFrame, cap_category: str) -> bool:
-    """Insert/update NSE OHLCV rows into nse_prices."""
+def upsert_equity_prices(df: pd.DataFrame, cap_category: str) -> bool:
+    """Insert/update US equity OHLCV rows into us_equity_prices."""
     if df is None or df.empty:
         return False
-    if not is_enabled() or not _ensure_nse_schema():
+    if not is_enabled() or not _ensure_equity_schema():
         return False
 
     try:
@@ -341,24 +342,24 @@ def upsert_nse_prices(df: pd.DataFrame, cap_category: str) -> bool:
 
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.executemany(_NSE_UPSERT_SQL, records)
+                cur.executemany(_EQUITY_UPSERT_SQL, records)
             conn.commit()
 
         return True
     except Exception as e:
-        logger.warning("PostgreSQL NSE upsert failed: %s", e)
+        logger.warning("PostgreSQL equity upsert failed: %s", e)
         return False
 
 
-def read_nse_ticker(ticker: str) -> Optional[pd.DataFrame]:
-    """Read all rows for a single NSE ticker."""
-    if not is_enabled() or not _ensure_nse_schema():
+def read_equity_ticker(ticker: str) -> Optional[pd.DataFrame]:
+    """Read all rows for a single US equity ticker."""
+    if not is_enabled() or not _ensure_equity_schema():
         return None
 
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_NSE_SELECT_SQL, (ticker.upper(),))
+                cur.execute(_EQUITY_SELECT_SQL, (ticker.upper(),))
                 rows = cur.fetchall()
 
         if not rows:
@@ -369,16 +370,16 @@ def read_nse_ticker(ticker: str) -> Optional[pd.DataFrame]:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_convert(None)
         return df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
     except Exception as e:
-        logger.warning("PostgreSQL NSE read failed for %s: %s", ticker, e)
+        logger.warning("PostgreSQL equity read failed for %s: %s", ticker, e)
         return None
 
 
-def read_nse_prices(tickers: list[str] | None = None, cap_category: str | None = None) -> Optional[pd.DataFrame]:
+def read_equity_prices(tickers: list[str] | None = None, cap_category: str | None = None) -> Optional[pd.DataFrame]:
     """
-    Read NSE prices for a list of tickers or an entire cap category.
+    Read US equity prices for a list of tickers or an entire cap category.
     Returns DataFrame with Date, Ticker, OHLCV, CapCategory columns.
     """
-    if not is_enabled() or not _ensure_nse_schema():
+    if not is_enabled() or not _ensure_equity_schema():
         return None
 
     try:
@@ -395,7 +396,7 @@ def read_nse_prices(tickers: list[str] | None = None, cap_category: str | None =
             params.append(cap_category.upper())
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = _NSE_SELECT_ALL_SQL.format(where_clause=where)
+        sql = _EQUITY_SELECT_ALL_SQL.format(where_clause=where)
 
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -410,24 +411,29 @@ def read_nse_prices(tickers: list[str] | None = None, cap_category: str | None =
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_convert(None)
         return df.dropna(subset=["Date"]).sort_values(["Ticker", "Date"]).reset_index(drop=True)
     except Exception as e:
-        logger.warning("PostgreSQL NSE bulk read failed: %s", e)
+        logger.warning("PostgreSQL equity bulk read failed: %s", e)
         return None
 
 
-def reset_nse_prices() -> bool:
-    if not is_enabled() or not _ensure_nse_schema():
+def reset_equity_prices() -> bool:
+    if not is_enabled() or not _ensure_equity_schema():
         return False
 
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("TRUNCATE TABLE nse_prices;")
+                cur.execute("TRUNCATE TABLE us_equity_prices;")
             conn.commit()
         return True
     except Exception as e:
-        logger.warning("PostgreSQL NSE truncate failed: %s", e)
+        logger.warning("PostgreSQL equity truncate failed: %s", e)
         return False
 
 
-# ── Backwards compatibility alias ─────────────────────────────────────
+# ── Backwards compatibility aliases ───────────────────────────────────
 reset_market_prices = reset_us_prices
+# Legacy NSE names — point to equity equivalents
+upsert_nse_prices  = upsert_equity_prices
+read_nse_ticker    = read_equity_ticker
+read_nse_prices    = read_equity_prices
+reset_nse_prices   = reset_equity_prices

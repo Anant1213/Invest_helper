@@ -23,7 +23,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 
-from backend.postgres_store import (
+from backend.db.postgres_store import (
     is_enabled as postgres_enabled,
     read_ticker_prices as read_postgres_ticker,
     upsert_prices as upsert_postgres_prices,

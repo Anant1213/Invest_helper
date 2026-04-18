@@ -30,7 +30,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from analytics._db import ensure_table, upsert_df, load_us_prices, load_nse_prices
+from backend.stock_research.analytics._db import ensure_table, upsert_df, load_us_prices, load_equity_prices
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,13 @@ def compute(prices: pd.DataFrame, market: str) -> pd.DataFrame:
 
 
 def save(df: pd.DataFrame) -> int:
+    from backend.stock_research.analytics._db import _s3_enabled, write_analytics_to_s3
+    if _s3_enabled():
+        module = TABLE.split(".")[-1]
+        total = 0
+        for mkt in df["market"].dropna().unique():
+            total += write_analytics_to_s3(df[df["market"] == mkt], module, mkt)
+        return total
     ensure_table(_TABLE_SQL, TABLE)
     return upsert_df(df, TABLE, PK_COLS, VALUE_COLS)
 
@@ -167,7 +174,7 @@ def save(df: pd.DataFrame) -> int:
 def run(market: str, lookback_days: int | None = None) -> int:
     label = f"{lookback_days}d" if lookback_days else "full history"
     logger.info("[zscore] loading %s prices (%s)", market, label)
-    prices = load_us_prices(lookback_days) if market == "US" else load_nse_prices(lookback_days)
+    prices = load_us_prices(lookback_days) if market == "US" else load_equity_prices(lookback_days)
 
     if prices.empty:
         logger.warning("[zscore] no prices found for market=%s", market)

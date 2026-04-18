@@ -11,17 +11,17 @@ Tables created in the `analytics` schema:
   analytics.technical  — RSI, Bollinger Bands, MACD, moving averages
 
 Quick start:
-    from analytics.pipeline import run
+    from backend.stock_research.analytics.pipeline import run
     run()                          # all markets, all modules
-    run(markets=["NSE"])           # NSE only
+    run(markets=["US_EQ"])         # US equities (large/mid/small cap) only
     run(modules=["risk", "zscore"]) # specific modules, both markets
 
 Individual modules:
-    from analytics import returns, risk, momentum, zscore, technical
+    from backend.stock_research.analytics import returns, risk, momentum, zscore, technical
     rows = returns.run("US")
 """
 
-from analytics import returns, risk, momentum, zscore, technical
-from analytics.pipeline import run
+from backend.stock_research.analytics import returns, risk, momentum, zscore, technical
+from backend.stock_research.analytics.pipeline import run
 
 __all__ = ["returns", "risk", "momentum", "zscore", "technical", "run"]

@@ -24,7 +24,7 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 _MODEL_DIR = _ROOT / "models"
 _MODEL_PATH = _MODEL_DIR / "risk_model.pkl"
 

@@ -25,7 +25,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from analytics._db import ensure_table, upsert_df, load_us_prices, load_nse_prices
+from backend.stock_research.analytics._db import ensure_table, upsert_df, load_us_prices, load_equity_prices
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +114,17 @@ def _rolling_beta_alpha(
 
 def _build_benchmark(prices: pd.DataFrame, market: str) -> pd.Series:
     """
-    Build a benchmark return series:
-    - US  : SPY returns
-    - NSE : equal-weighted average of LARGE cap returns (proxy for Nifty 50)
+    Build a benchmark return series.
+    - market='US'    : SPY (present in us_prices)
+    - market='US_EQ' : equal-weighted large-cap returns (S&P 500 proxy,
+                       since SPY is not in us_equity_prices)
     """
     if market == "US":
         spy = prices[prices["Ticker"] == "SPY"].set_index("Date")["Close"].sort_index()
         return spy.pct_change(fill_method=None).rename("benchmark")
 
-    # NSE — equal-weight large cap universe
-    large = prices[prices.get("CapCategory", pd.Series()) == "LARGE"] if "CapCategory" in prices.columns else prices
+    # US_EQ — use equal-weight large-cap universe as benchmark
+    large = prices[prices["CapCategory"] == "LARGE"] if "CapCategory" in prices.columns else prices
     if large.empty:
         large = prices
 
@@ -207,6 +208,13 @@ def compute(prices: pd.DataFrame, market: str) -> pd.DataFrame:
 
 
 def save(df: pd.DataFrame) -> int:
+    from backend.stock_research.analytics._db import _s3_enabled, write_analytics_to_s3
+    if _s3_enabled():
+        module = TABLE.split(".")[-1]
+        total = 0
+        for mkt in df["market"].dropna().unique():
+            total += write_analytics_to_s3(df[df["market"] == mkt], module, mkt)
+        return total
     ensure_table(_TABLE_SQL, TABLE)
     return upsert_df(df, TABLE, PK_COLS, VALUE_COLS)
 
@@ -214,7 +222,7 @@ def save(df: pd.DataFrame) -> int:
 def run(market: str, lookback_days: int | None = None) -> int:
     label = f"{lookback_days}d" if lookback_days else "full history"
     logger.info("[risk] loading %s prices (%s)", market, label)
-    prices = load_us_prices(lookback_days) if market == "US" else load_nse_prices(lookback_days)
+    prices = load_us_prices(lookback_days) if market == "US" else load_equity_prices(lookback_days)
 
     if prices.empty:
         logger.warning("[risk] no prices found for market=%s", market)

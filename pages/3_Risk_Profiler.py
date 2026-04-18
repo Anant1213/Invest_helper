@@ -12,7 +12,7 @@ import streamlit as st
 
 from backend.ui import apply_styles, page_header, section_header, kpi_row, ticker_tape, disclaimer, CHART_LAYOUT
 from backend.market import fetch_prices, compute_metrics, ALLOWLIST
-from backend.risk_model import (
+from backend.risk_profiler.risk_model import (
     predict_risk, recommend_funds, get_trained_model,
     RISK_LABELS, FUND_PROFILES,
 )

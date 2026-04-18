@@ -37,7 +37,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from analytics.pipeline import run, MARKETS, MODULES  # noqa: E402
+from backend.stock_research.analytics.pipeline import run, MARKETS, MODULES  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

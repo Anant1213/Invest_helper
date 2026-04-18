@@ -27,7 +27,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from analytics._db import ensure_table, upsert_df, load_us_prices, load_nse_prices
+from backend.stock_research.analytics._db import ensure_table, upsert_df, load_us_prices, load_equity_prices
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +64,16 @@ VALUE_COLS = [
 
 def _bench_cumret(prices: pd.DataFrame, market: str, dates: pd.DatetimeIndex, window: int) -> pd.Series:
     """
-    Compute trailing `window`-day cumulative return for the benchmark
-    aligned to `dates`.
-    US  → SPY
-    NSE → equal-weight large-cap average
+    Compute trailing `window`-day cumulative return for the benchmark.
+    US     → SPY (present in us_prices)
+    US_EQ  → equal-weight large-cap average (S&P 500 proxy)
     """
     if market == "US":
         bdf = prices[prices["Ticker"] == "SPY"].set_index("Date")["Close"].sort_index()
     else:
-        cap_col = "CapCategory" if "CapCategory" in prices.columns else None
-        if cap_col:
-            subset = prices[prices[cap_col] == "LARGE"]
-        else:
+        # US_EQ: large-cap equal-weight as benchmark
+        subset = prices[prices["CapCategory"] == "LARGE"] if "CapCategory" in prices.columns else prices
+        if subset.empty:
             subset = prices
         pivot = subset.pivot_table(index="Date", columns="Ticker", values="Close")
         bdf   = pivot.mean(axis=1).sort_index()
@@ -160,6 +158,13 @@ def compute(prices: pd.DataFrame, market: str) -> pd.DataFrame:
 
 
 def save(df: pd.DataFrame) -> int:
+    from backend.stock_research.analytics._db import _s3_enabled, write_analytics_to_s3
+    if _s3_enabled():
+        module = TABLE.split(".")[-1]
+        total = 0
+        for mkt in df["market"].dropna().unique():
+            total += write_analytics_to_s3(df[df["market"] == mkt], module, mkt)
+        return total
     ensure_table(_TABLE_SQL, TABLE)
     return upsert_df(df, TABLE, PK_COLS, VALUE_COLS)
 
@@ -167,7 +172,7 @@ def save(df: pd.DataFrame) -> int:
 def run(market: str, lookback_days: int | None = None) -> int:
     label = f"{lookback_days}d" if lookback_days else "full history"
     logger.info("[momentum] loading %s prices (%s)", market, label)
-    prices = load_us_prices(lookback_days) if market == "US" else load_nse_prices(lookback_days)
+    prices = load_us_prices(lookback_days) if market == "US" else load_equity_prices(lookback_days)
 
     if prices.empty:
         logger.warning("[momentum] no prices found for market=%s", market)
