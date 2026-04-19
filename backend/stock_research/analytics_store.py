@@ -17,11 +17,41 @@ Markets:
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# ── Local parquet cache (avoids repeated S3 round-trips) ─────────────
+_CACHE_DIR = Path.home() / ".assetera" / "s3_cache"
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_SNAPSHOT_TTL = 3600   # 1 hour — re-fetch from S3 once per hour
+_HISTORY_TTL  = 3600
+
+
+def _cache_path(name: str) -> Path:
+    return _CACHE_DIR / f"{name}.parquet"
+
+
+def _cache_valid(path: Path, ttl: int = _SNAPSHOT_TTL) -> bool:
+    return path.exists() and (time.time() - path.stat().st_mtime) < ttl
+
+
+def _read_cache(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _write_cache(path: Path, df: pd.DataFrame) -> None:
+    try:
+        df.to_parquet(path, index=False)
+    except Exception as e:
+        logger.warning("Could not write S3 cache: %s", e)
 
 
 # ── Backend detection ─────────────────────────────────────────────────
@@ -131,7 +161,7 @@ def _get_snapshot_s3(market: str, cap_category: str | None = None) -> pd.DataFra
     if has_prices:
         cte_parts.append(f"""
         px_raw AS (
-            SELECT ticker, close AS last_price, date
+            SELECT "Ticker" AS ticker, "Close" AS last_price, "Date" AS date
             FROM read_parquet('{_uri(price_key)}')
         ),
         px AS (
@@ -186,9 +216,9 @@ def _get_snapshot_s3(market: str, cap_category: str | None = None) -> pd.DataFra
         price_uri = _uri(price_key)
         cte_parts.append(f"""
         cap AS (
-            SELECT DISTINCT ticker, cap_category
+            SELECT DISTINCT "Ticker" AS ticker
             FROM read_parquet('{price_uri}')
-            WHERE UPPER(cap_category) = '{cap_category.upper()}'
+            WHERE UPPER("CapCategory") = '{cap_category.upper()}'
         )""")
         joins.append(f"JOIN cap USING (ticker)")
         # Rebuild CTE string to include cap
@@ -213,6 +243,40 @@ def _get_snapshot_s3(market: str, cap_category: str | None = None) -> pd.DataFra
 
 
 def _get_ohlcv_s3(ticker: str, market: str, lookback_days: int = 504) -> pd.DataFrame:
+    from datetime import date, timedelta
+
+    # ── New path: read per-symbol curated parquet from datalayer ─────────
+    try:
+        import datalayer.s3 as dl_s3
+        from datalayer.schemas import ASSET_EQUITIES, ASSET_ETF, ASSET_FIXED_INCOME
+
+        # Try each asset class zone for the ticker
+        asset_classes = (
+            [ASSET_EQUITIES]
+            if market == "US_EQ"
+            else [ASSET_ETF, ASSET_FIXED_INCOME, ASSET_EQUITIES]
+        )
+        for ac in asset_classes:
+            key = dl_s3.curated_key(ac, "yfinance", ticker.upper())
+            if not dl_s3.key_exists(key):
+                continue
+            df = dl_s3.read_parquet(key)
+            if df.empty:
+                continue
+            if lookback_days:
+                cutoff = pd.Timestamp(date.today() - timedelta(days=lookback_days))
+                df = df[pd.to_datetime(df["trade_date"]) >= cutoff]
+            df = df.rename(columns={
+                "trade_date": "Date", "open": "Open", "high": "High",
+                "low": "Low",  "close": "Close", "volume": "Volume",
+            })
+            df["Date"] = pd.to_datetime(df["Date"])
+            cols = [c for c in ["Date", "Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+            return df[cols].sort_values("Date").reset_index(drop=True)
+    except Exception as e:
+        logger.warning("[analytics_store] curated ohlcv lookup failed for %s: %s — falling back", ticker, e)
+
+    # ── Legacy fallback: combined market/ parquet ─────────────────────────
     from backend.db.s3_store import market_key, key_exists, s3_uri
     from backend.db.duckdb_store import get_conn
     key = market_key(market)
@@ -220,12 +284,11 @@ def _get_ohlcv_s3(ticker: str, market: str, lookback_days: int = 504) -> pd.Data
         return pd.DataFrame()
     uri = s3_uri(key)
     sql = f"""
-        SELECT date AS "Date", open AS "Open", high AS "High", low AS "Low",
-               close AS "Close", volume AS "Volume"
+        SELECT "Date", "Open", "High", "Low", "Close", "Volume"
         FROM read_parquet('{uri}')
-        WHERE UPPER(ticker) = UPPER('{ticker}')
-          AND date >= CURRENT_DATE - INTERVAL '{lookback_days} days'
-        ORDER BY date
+        WHERE UPPER("Ticker") = UPPER('{ticker}')
+          AND "Date" >= CURRENT_DATE - INTERVAL '{lookback_days} days'
+        ORDER BY "Date"
     """
     try:
         df = get_conn().execute(sql).df()
@@ -280,6 +343,40 @@ def _get_analytics_history_s3(
 
 
 def _get_tickers_s3(market: str, cap_category: str | None = None) -> list[str]:
+    # ── New path: list symbols from curated/ key hierarchy ───────────────
+    try:
+        import datalayer.s3 as dl_s3
+        from datalayer.schemas import ASSET_EQUITIES, ASSET_ETF, ASSET_FIXED_INCOME, EQUITIES_CAP
+
+        if market == "US_EQ":
+            prefix = f"curated/{ASSET_EQUITIES}/source=yfinance/"
+            keys   = dl_s3.list_keys(prefix)
+        else:
+            # US market = ETF + fixed income combined
+            keys = (
+                dl_s3.list_keys(f"curated/{ASSET_ETF}/source=yfinance/")
+                + dl_s3.list_keys(f"curated/{ASSET_FIXED_INCOME}/source=yfinance/")
+            )
+
+        tickers: list[str] = []
+        for k in keys:
+            if not k.endswith("data.parquet"):
+                continue
+            for part in k.split("/"):
+                if part.startswith("symbol="):
+                    sym = part[len("symbol="):]
+                    if market == "US_EQ" and cap_category:
+                        if EQUITIES_CAP.get(sym, "").upper() != cap_category.upper():
+                            continue
+                    tickers.append(sym)
+                    break
+
+        if tickers:
+            return sorted(set(tickers))
+    except Exception as e:
+        logger.warning("[analytics_store] curated ticker list failed: %s — falling back", e)
+
+    # ── Legacy fallback: combined market/ parquet ─────────────────────────
     from backend.db.s3_store import market_key, key_exists, s3_uri
     from backend.db.duckdb_store import get_conn
     key = market_key(market)
@@ -287,9 +384,9 @@ def _get_tickers_s3(market: str, cap_category: str | None = None) -> list[str]:
         return []
     uri = s3_uri(key)
     if cap_category and market == "US_EQ":
-        sql = f"SELECT DISTINCT ticker FROM read_parquet('{uri}') WHERE UPPER(cap_category) = UPPER('{cap_category}') ORDER BY ticker"
+        sql = f'SELECT DISTINCT "Ticker" AS ticker FROM read_parquet(\'{uri}\') WHERE UPPER("CapCategory") = UPPER(\'{cap_category}\') ORDER BY "Ticker"'
     else:
-        sql = f"SELECT DISTINCT ticker FROM read_parquet('{uri}') ORDER BY ticker"
+        sql = f'SELECT DISTINCT "Ticker" AS ticker FROM read_parquet(\'{uri}\') ORDER BY "Ticker"'
     try:
         df = get_conn().execute(sql).df()
         return df["ticker"].tolist()
@@ -402,11 +499,22 @@ def get_snapshot(market: str, cap_category: str | None = None) -> pd.DataFrame:
     """
     One row per ticker: latest values from all 5 analytics tables joined.
     For US_EQ market, optionally filter by cap_category ('LARGE','MID','SMALL').
+    Results are cached locally for up to 1 hour to avoid repeated S3 reads.
     """
     if not is_enabled():
         return pd.DataFrame()
     if _s3_enabled():
-        return _get_snapshot_s3(market, cap_category)
+        cache_name = f"snapshot_{market}_{cap_category or 'ALL'}"
+        cache_file = _cache_path(cache_name)
+        if _cache_valid(cache_file, _SNAPSHOT_TTL):
+            df = _read_cache(cache_file)
+            if not df.empty:
+                logger.info("[analytics_store] snapshot served from local cache: %s", cache_name)
+                return df
+        df = _get_snapshot_s3(market, cap_category)
+        if not df.empty:
+            _write_cache(cache_file, df)
+        return df
     return _get_snapshot_pg(market, cap_category)
 
 
@@ -449,11 +557,33 @@ def get_analytics_history(
     """
     Returns dict keyed by module name, each a DataFrame indexed by date.
     Keys: 'returns', 'risk', 'momentum', 'zscore', 'technical'
+    Results are cached locally per ticker for up to 1 hour.
     """
     if not is_enabled():
         return {}
     if _s3_enabled():
-        return _get_analytics_history_s3(ticker, market, lookback_days)
+        cache_name = f"history_{market}_{ticker.upper()}"
+        cache_file = _cache_path(cache_name)
+        if _cache_valid(cache_file, _HISTORY_TTL):
+            try:
+                import pickle
+                with open(cache_file.with_suffix(".pkl"), "rb") as f:
+                    cached = pickle.load(f)
+                if cached:
+                    return cached
+            except Exception:
+                pass
+        result = _get_analytics_history_s3(ticker, market, lookback_days)
+        if result:
+            try:
+                import pickle
+                with open(cache_file.with_suffix(".pkl"), "wb") as f:
+                    pickle.dump(result, f)
+                # Touch parquet sentinel for mtime tracking
+                cache_file.with_suffix(".pkl").touch()
+            except Exception:
+                pass
+        return result
     # Postgres fallback
     result = {}
     tables = {

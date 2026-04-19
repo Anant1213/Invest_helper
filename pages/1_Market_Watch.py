@@ -27,33 +27,58 @@ def _tape_data():
 ticker_tape(_tape_data())
 page_header("Market Watch", "Candlestick charts · Technical indicators · Correlation heatmap", badge="DISK CACHE")
 
-# ── Sidebar ───────────────────────────────────────────────────────────
-st.sidebar.markdown("### Tickers")
-selected = []
-for grp, items in CATALOG.items():
-    filtered = {lbl: tkr for lbl, tkr in items.items() if tkr in ALLOWLIST}
-    if not filtered:
-        continue
-    st.sidebar.markdown(f"**{grp}**")
-    for lbl, tkr in filtered.items():
-        if st.sidebar.checkbox(lbl, value=(tkr in DEFAULT_SELECTION), key=f"mw_{tkr}"):
-            selected.append(tkr)
+# ── Inline Controls ───────────────────────────────────────────────────
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Settings")
-period   = st.sidebar.selectbox("Period",   PERIODS,   index=PERIODS.index(DEFAULT_PERIOD))
-interval = st.sidebar.selectbox("Interval", INTERVALS, index=INTERVALS.index(DEFAULT_INTERVAL))
+# Build flat ticker list preserving group labels
+_all_options: dict[str, str] = {}  # label → ticker
+for _grp, _items in CATALOG.items():
+    for _lbl, _tkr in _items.items():
+        if _tkr in ALLOWLIST:
+            _all_options[_lbl] = _tkr
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Chart Options")
-chart_ticker  = st.sidebar.selectbox("Candlestick ticker", options=selected if selected else ["SPY"])
-show_bb       = st.sidebar.checkbox("Bollinger Bands (20,2)", value=True)
-show_rsi      = st.sidebar.checkbox("RSI (14)", value=True)
-show_macd     = st.sidebar.checkbox("MACD (12,26,9)", value=False)
-show_volume   = st.sidebar.checkbox("Volume", value=True)
+_default_labels = [lbl for lbl, tkr in _all_options.items() if tkr in DEFAULT_SELECTION]
+
+st.markdown(
+    "<div style='background:var(--bg-card);border:1px solid var(--border);"
+    "border-radius:var(--r-lg);padding:1rem 1.2rem;margin-bottom:1rem;'>",
+    unsafe_allow_html=True,
+)
+
+row1_c1, row1_c2, row1_c3 = st.columns([3, 1, 1])
+with row1_c1:
+    sel_labels = st.multiselect(
+        "Tickers",
+        options=list(_all_options.keys()),
+        default=_default_labels,
+        help="Select one or more tickers to analyse",
+    )
+    selected = [_all_options[lbl] for lbl in sel_labels if lbl in _all_options]
+
+with row1_c2:
+    period   = st.selectbox("Period",   PERIODS,   index=PERIODS.index(DEFAULT_PERIOD))
+
+with row1_c3:
+    interval = st.selectbox("Interval", INTERVALS, index=INTERVALS.index(DEFAULT_INTERVAL))
+
+row2_c1, row2_c2, row2_c3, row2_c4, row2_c5, row2_c6 = st.columns([2, 1, 1, 1, 1, 1])
+with row2_c1:
+    chart_ticker = st.selectbox(
+        "Candlestick chart for",
+        options=selected if selected else list(_all_options.values())[:1],
+    )
+with row2_c2:
+    show_bb     = st.checkbox("Bollinger Bands", value=True)
+with row2_c3:
+    show_rsi    = st.checkbox("RSI (14)",        value=True)
+with row2_c4:
+    show_macd   = st.checkbox("MACD",            value=False)
+with row2_c5:
+    show_volume = st.checkbox("Volume",          value=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 if not selected:
-    st.warning("Select at least one ticker from the sidebar.")
+    st.info("Select at least one ticker above to get started.")
     st.stop()
 
 # ── Fetch data ────────────────────────────────────────────────────────

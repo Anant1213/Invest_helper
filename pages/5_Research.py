@@ -18,7 +18,7 @@ from backend.stock_research.analytics_store import (
     get_analytics_history,
     get_tickers,
 )
-from backend.db.postgres_store import is_enabled
+from backend.stock_research.analytics_store import is_enabled
 
 st.set_page_config(
     page_title="Stock Research — AssetEra",
@@ -59,41 +59,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Sidebar ────────────────────────────────────────────────────────────
-st.sidebar.markdown("### Universe")
-market_label = st.sidebar.selectbox(
-    "Market",
-    ["US Equities (NYSE/NASDAQ)", "US ETFs & Funds"],
-    index=0,
-)
-MARKET = "US_EQ" if "Equities" in market_label else "US"
-
-cap_options = ["All Caps", "Large Cap", "Mid Cap", "Small Cap"]
-cap_sel = st.sidebar.selectbox("Cap Tier", cap_options, index=0) if MARKET == "US_EQ" else "All Caps"
-CAP = None if cap_sel == "All Caps" else cap_sel.split()[0].upper()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### About")
-st.sidebar.markdown(
-    "<p style='font-size:.78rem;color:var(--text-2);line-height:1.6;'>"
-    "Analytics are computed from 10 years of daily OHLCV data stored in Supabase. "
-    "Rolling metrics use 21d / 63d / 252d windows. "
-    "Benchmark for US Equities: equal-weight large-cap S&P 500 proxy."
-    "</p>",
-    unsafe_allow_html=True,
-)
-
 # ── DB gate ────────────────────────────────────────────────────────────
 if not is_enabled():
     page_header("Stock Research", "Screener · Deep Dive · Compare")
-    st.error("PostgreSQL is not configured. Set POSTGRES_URL or DATABASE_URL in your .env file.")
+    st.error("No data backend configured. Set DATA_BUCKET + AWS credentials (S3) or POSTGRES_URL in your .env file.")
     st.stop()
 
-page_header(
-    "Stock Research",
-    f"Screener · Deep Dive · Compare  ·  {market_label}",
-    badge="LIVE DB",
+page_header("Stock Research", "Screener · Deep Dive · Compare", badge="LIVE DB")
+
+# ── Inline universe selector ───────────────────────────────────────────
+st.markdown(
+    "<div style='background:var(--bg-card);border:1px solid var(--border);"
+    "border-radius:var(--r-lg);padding:.9rem 1.2rem;margin-bottom:1rem;'>",
+    unsafe_allow_html=True,
 )
+
+uc1, uc2, uc3 = st.columns([2, 2, 4])
+with uc1:
+    market_label = st.selectbox(
+        "Market",
+        ["US Equities (NYSE/NASDAQ)", "US ETFs & Funds"],
+        index=0,
+        label_visibility="visible",
+    )
+    MARKET = "US_EQ" if "Equities" in market_label else "US"
+
+with uc2:
+    cap_options = ["All Caps", "Large Cap", "Mid Cap", "Small Cap"]
+    cap_sel = st.selectbox("Cap Tier", cap_options, index=0) if MARKET == "US_EQ" else "All Caps"
+    CAP = None if cap_sel == "All Caps" else cap_sel.split()[0].upper()
+
+with uc3:
+    st.markdown(
+        "<p style='font-size:.78rem;color:var(--text-2);line-height:1.6;margin-top:.4rem;'>"
+        "Analytics from 10 years of daily OHLCV data. "
+        "Rolling metrics: 21d / 63d / 252d windows. "
+        "Benchmark: equal-weight large-cap S&P 500 proxy."
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 # ── Cached data loaders ────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
@@ -350,268 +356,268 @@ with tab_dive:
     row = snap[snap["ticker"] == dd_ticker]
     if row.empty:
         st.warning("No data for this ticker.")
-        st.stop()
-    row = row.iloc[0]
-
-    # ── KPI cards ──────────────────────────────────────────────────────
-    section_header(f"{dd_ticker}  ·  KPI Dashboard")
-
-    def _kpi(label: str, value, fmt: str = "{:.2f}", suffix: str = "", pct_mult: float = 1.0):
-        try:
-            v = float(value) * pct_mult
-            fmtd = fmt.format(v) + suffix
-            cls = "pos" if v > 0 else ("neg" if v < 0 else "neu")
-        except (TypeError, ValueError):
-            fmtd = "—"
-            cls = "neu"
-        return (
-            f'<div class="kpi-card">'
-            f'<div class="kpi-label">{label}</div>'
-            f'<div class="kpi-value {cls}">{fmtd}</div>'
-            f'</div>'
-        )
-
-    kpi_html = '<div class="kpi-grid">'
-    kpi_html += _kpi("Last Price",  row.get("last_price"), "${:.2f}")
-    kpi_html += _kpi("1d Return",   row.get("ret_1d"),  "{:+.2f}", "%", 100)
-    kpi_html += _kpi("5d Return",   row.get("ret_5d"),  "{:+.2f}", "%", 100)
-    kpi_html += _kpi("21d Return",  row.get("ret_21d"), "{:+.2f}", "%", 100)
-    kpi_html += _kpi("3m Momentum", row.get("mom_3m"),  "{:+.2f}", "%", 100)
-    kpi_html += _kpi("12m Momentum",row.get("mom_12m"), "{:+.2f}", "%", 100)
-    kpi_html += _kpi("RSI (14)",    row.get("rsi_14"),  "{:.1f}")
-    kpi_html += _kpi("Ann Vol",     row.get("vol_252d"),"{:.1f}",  "%", 100)
-    kpi_html += _kpi("Sharpe 252d", row.get("sharpe_252d"), "{:.2f}")
-    kpi_html += _kpi("Sortino",     row.get("sortino_252d"), "{:.2f}")
-    kpi_html += _kpi("Max DD 252d", row.get("max_dd_252d"), "{:.1f}", "%", 100)
-    kpi_html += _kpi("Beta",        row.get("beta_252d"), "{:.2f}")
-    kpi_html += _kpi("Alpha (ann)", row.get("alpha_252d"), "{:+.2f}", "%", 100)
-    kpi_html += _kpi("RS vs Bench", row.get("rs_vs_bench"), "{:.3f}")
-    kpi_html += _kpi("52w Hi Dist", row.get("hi_52w_pct"), "{:+.1f}", "%")
-    kpi_html += _kpi("52w Lo Dist", row.get("lo_52w_pct"), "{:+.1f}", "%")
-    kpi_html += _kpi("MACD Hist",   row.get("macd_hist"),  "{:+.4f}")
-    kpi_html += _kpi("BB %B",       row.get("bb_pct_b"),   "{:.3f}")
-    kpi_html += _kpi("vs MA50",     row.get("pct_vs_ma50"),  "{:+.1f}", "%")
-    kpi_html += _kpi("vs MA200",    row.get("pct_vs_ma200"), "{:+.1f}", "%")
-    kpi_html += '</div>'
-    st.markdown(kpi_html, unsafe_allow_html=True)
-
-    # ── Load OHLCV & history ────────────────────────────────────────────
-    with st.spinner("Loading price history…"):
-        ohlcv = _load_ohlcv(dd_ticker, MARKET)
-        hist  = _load_history(dd_ticker, MARKET)
-
-    if ohlcv.empty:
-        st.warning("No OHLCV data available for this ticker.")
     else:
-        st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
-        section_header("Price Chart")
+        row = row.iloc[0]
 
-        show_bb  = st.checkbox("Bollinger Bands", value=True, key="dd_bb")
-        show_ma  = st.checkbox("Moving Averages (50 / 200)", value=True, key="dd_ma")
-        show_rsi = st.checkbox("RSI (14)", value=True, key="dd_rsi")
-        show_mac = st.checkbox("MACD", value=False, key="dd_macd")
-        show_vol = st.checkbox("Volume", value=True, key="dd_vol")
+        # ── KPI cards ──────────────────────────────────────────────────────
+        section_header(f"{dd_ticker}  ·  KPI Dashboard")
 
-        # Build subplot row spec
-        row_heights = [0.55]
-        if show_rsi: row_heights.append(0.15)
-        if show_mac: row_heights.append(0.15)
-        if show_vol: row_heights.append(0.15)
-        n_rows = len(row_heights)
+        def _kpi(label: str, value, fmt: str = "{:.2f}", suffix: str = "", pct_mult: float = 1.0):
+            try:
+                v = float(value) * pct_mult
+                fmtd = fmt.format(v) + suffix
+                cls = "pos" if v > 0 else ("neg" if v < 0 else "neu")
+            except (TypeError, ValueError):
+                fmtd = "—"
+                cls = "neu"
+            return (
+                f'<div class="kpi-card">'
+                f'<div class="kpi-label">{label}</div>'
+                f'<div class="kpi-value {cls}">{fmtd}</div>'
+                f'</div>'
+            )
 
-        specs = [[{"secondary_y": False}]] * n_rows
-        fig = make_subplots(
-            rows=n_rows, cols=1,
-            shared_xaxes=True,
-            row_heights=row_heights,
-            vertical_spacing=0.02,
-            specs=specs,
-        )
+        kpi_html = '<div class="kpi-grid">'
+        kpi_html += _kpi("Last Price",  row.get("last_price"), "${:.2f}")
+        kpi_html += _kpi("1d Return",   row.get("ret_1d"),  "{:+.2f}", "%", 100)
+        kpi_html += _kpi("5d Return",   row.get("ret_5d"),  "{:+.2f}", "%", 100)
+        kpi_html += _kpi("21d Return",  row.get("ret_21d"), "{:+.2f}", "%", 100)
+        kpi_html += _kpi("3m Momentum", row.get("mom_3m"),  "{:+.2f}", "%", 100)
+        kpi_html += _kpi("12m Momentum",row.get("mom_12m"), "{:+.2f}", "%", 100)
+        kpi_html += _kpi("RSI (14)",    row.get("rsi_14"),  "{:.1f}")
+        kpi_html += _kpi("Ann Vol",     row.get("vol_252d"),"{:.1f}",  "%", 100)
+        kpi_html += _kpi("Sharpe 252d", row.get("sharpe_252d"), "{:.2f}")
+        kpi_html += _kpi("Sortino",     row.get("sortino_252d"), "{:.2f}")
+        kpi_html += _kpi("Max DD 252d", row.get("max_dd_252d"), "{:.1f}", "%", 100)
+        kpi_html += _kpi("Beta",        row.get("beta_252d"), "{:.2f}")
+        kpi_html += _kpi("Alpha (ann)", row.get("alpha_252d"), "{:+.2f}", "%", 100)
+        kpi_html += _kpi("RS vs Bench", row.get("rs_vs_bench"), "{:.3f}")
+        kpi_html += _kpi("52w Hi Dist", row.get("hi_52w_pct"), "{:+.1f}", "%")
+        kpi_html += _kpi("52w Lo Dist", row.get("lo_52w_pct"), "{:+.1f}", "%")
+        kpi_html += _kpi("MACD Hist",   row.get("macd_hist"),  "{:+.4f}")
+        kpi_html += _kpi("BB %B",       row.get("bb_pct_b"),   "{:.3f}")
+        kpi_html += _kpi("vs MA50",     row.get("pct_vs_ma50"),  "{:+.1f}", "%")
+        kpi_html += _kpi("vs MA200",    row.get("pct_vs_ma200"), "{:+.1f}", "%")
+        kpi_html += '</div>'
+        st.markdown(kpi_html, unsafe_allow_html=True)
 
-        # Candlestick
-        fig.add_trace(go.Candlestick(
-            x=ohlcv["Date"], open=ohlcv["Open"], high=ohlcv["High"],
-            low=ohlcv["Low"], close=ohlcv["Close"],
-            name=dd_ticker,
-            increasing_line_color="#00C896",
-            decreasing_line_color="#FF3560",
-            increasing_fillcolor="#00C896",
-            decreasing_fillcolor="#FF3560",
-        ), row=1, col=1)
+        # ── Load OHLCV & history ────────────────────────────────────────────
+        with st.spinner("Loading price history…"):
+            ohlcv = _load_ohlcv(dd_ticker, MARKET)
+            hist  = _load_history(dd_ticker, MARKET)
 
-        # Bollinger Bands
-        if show_bb and "technical" in hist:
-            tec = hist["technical"]
-            if "bb_upper" in tec.columns:
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["bb_upper"], name="BB Upper",
-                    line=dict(color="rgba(41,98,255,0.45)", width=1, dash="dot"),
-                    showlegend=False,
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["bb_mid"] if "bb_mid" in tec.columns else tec["ma_20"],
-                    name="BB Mid",
-                    line=dict(color="rgba(41,98,255,0.6)", width=1),
-                    showlegend=False,
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["bb_lower"], name="BB Lower",
-                    fill="tonexty" if False else None,
-                    line=dict(color="rgba(41,98,255,0.45)", width=1, dash="dot"),
-                    showlegend=False,
-                ), row=1, col=1)
+        if ohlcv.empty:
+            st.warning("No OHLCV data available for this ticker.")
+        else:
+            st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
+            section_header("Price Chart")
 
-        # Moving averages
-        if show_ma and "technical" in hist:
-            tec = hist["technical"]
-            if "ma_50" in tec.columns:
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["ma_50"], name="MA 50",
-                    line=dict(color="#FFB020", width=1.2),
-                ), row=1, col=1)
-            if "ma_200" in tec.columns:
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["ma_200"], name="MA 200",
-                    line=dict(color="#9C27B0", width=1.2),
-                ), row=1, col=1)
+            show_bb  = st.checkbox("Bollinger Bands", value=True, key="dd_bb")
+            show_ma  = st.checkbox("Moving Averages (50 / 200)", value=True, key="dd_ma")
+            show_rsi = st.checkbox("RSI (14)", value=True, key="dd_rsi")
+            show_mac = st.checkbox("MACD", value=False, key="dd_macd")
+            show_vol = st.checkbox("Volume", value=True, key="dd_vol")
 
-        cur_row = 2
-        # RSI
-        if show_rsi and "technical" in hist:
-            tec = hist["technical"]
-            if "rsi_14" in tec.columns:
-                fig.add_trace(go.Scatter(
-                    x=tec.index, y=tec["rsi_14"], name="RSI 14",
-                    line=dict(color="#2962FF", width=1.5),
-                ), row=cur_row, col=1)
-                fig.add_hline(y=70, line=dict(color="#FF3560", dash="dot", width=1), row=cur_row, col=1)
-                fig.add_hline(y=30, line=dict(color="#00C896", dash="dot", width=1), row=cur_row, col=1)
-                fig.update_yaxes(title_text="RSI", row=cur_row, col=1, range=[0, 100])
-                cur_row += 1
+            # Build subplot row spec
+            row_heights = [0.55]
+            if show_rsi: row_heights.append(0.15)
+            if show_mac: row_heights.append(0.15)
+            if show_vol: row_heights.append(0.15)
+            n_rows = len(row_heights)
 
-        # MACD
-        if show_mac and "technical" in hist:
-            tec = hist["technical"]
-            if "macd_hist" in tec.columns:
-                colors_mac = ["#00C896" if v >= 0 else "#FF3560" for v in tec["macd_hist"].fillna(0)]
-                fig.add_trace(go.Bar(
-                    x=tec.index, y=tec["macd_hist"], name="MACD Hist",
-                    marker_color=colors_mac, opacity=0.75,
-                ), row=cur_row, col=1)
-                if "macd_line" in tec.columns:
+            specs = [[{"secondary_y": False}]] * n_rows
+            fig = make_subplots(
+                rows=n_rows, cols=1,
+                shared_xaxes=True,
+                row_heights=row_heights,
+                vertical_spacing=0.02,
+                specs=specs,
+            )
+
+            # Candlestick
+            fig.add_trace(go.Candlestick(
+                x=ohlcv["Date"], open=ohlcv["Open"], high=ohlcv["High"],
+                low=ohlcv["Low"], close=ohlcv["Close"],
+                name=dd_ticker,
+                increasing_line_color="#00C896",
+                decreasing_line_color="#FF3560",
+                increasing_fillcolor="#00C896",
+                decreasing_fillcolor="#FF3560",
+            ), row=1, col=1)
+
+            # Bollinger Bands
+            if show_bb and "technical" in hist:
+                tec = hist["technical"]
+                if "bb_upper" in tec.columns:
                     fig.add_trace(go.Scatter(
-                        x=tec.index, y=tec["macd_line"], name="MACD",
-                        line=dict(color="#2962FF", width=1.2),
-                    ), row=cur_row, col=1)
-                if "macd_signal" in tec.columns:
+                        x=tec.index, y=tec["bb_upper"], name="BB Upper",
+                        line=dict(color="rgba(41,98,255,0.45)", width=1, dash="dot"),
+                        showlegend=False,
+                    ), row=1, col=1)
                     fig.add_trace(go.Scatter(
-                        x=tec.index, y=tec["macd_signal"], name="Signal",
+                        x=tec.index, y=tec["bb_mid"] if "bb_mid" in tec.columns else tec["ma_20"],
+                        name="BB Mid",
+                        line=dict(color="rgba(41,98,255,0.6)", width=1),
+                        showlegend=False,
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=tec.index, y=tec["bb_lower"], name="BB Lower",
+                        fill="tonexty" if False else None,
+                        line=dict(color="rgba(41,98,255,0.45)", width=1, dash="dot"),
+                        showlegend=False,
+                    ), row=1, col=1)
+
+            # Moving averages
+            if show_ma and "technical" in hist:
+                tec = hist["technical"]
+                if "ma_50" in tec.columns:
+                    fig.add_trace(go.Scatter(
+                        x=tec.index, y=tec["ma_50"], name="MA 50",
                         line=dict(color="#FFB020", width=1.2),
+                    ), row=1, col=1)
+                if "ma_200" in tec.columns:
+                    fig.add_trace(go.Scatter(
+                        x=tec.index, y=tec["ma_200"], name="MA 200",
+                        line=dict(color="#9C27B0", width=1.2),
+                    ), row=1, col=1)
+
+            cur_row = 2
+            # RSI
+            if show_rsi and "technical" in hist:
+                tec = hist["technical"]
+                if "rsi_14" in tec.columns:
+                    fig.add_trace(go.Scatter(
+                        x=tec.index, y=tec["rsi_14"], name="RSI 14",
+                        line=dict(color="#2962FF", width=1.5),
                     ), row=cur_row, col=1)
-                fig.update_yaxes(title_text="MACD", row=cur_row, col=1)
-                cur_row += 1
+                    fig.add_hline(y=70, line=dict(color="#FF3560", dash="dot", width=1), row=cur_row, col=1)
+                    fig.add_hline(y=30, line=dict(color="#00C896", dash="dot", width=1), row=cur_row, col=1)
+                    fig.update_yaxes(title_text="RSI", row=cur_row, col=1, range=[0, 100])
+                    cur_row += 1
 
-        # Volume
-        if show_vol:
-            vol_colors = [
-                "#00C896" if ohlcv["Close"].iloc[i] >= ohlcv["Open"].iloc[i] else "#FF3560"
-                for i in range(len(ohlcv))
-            ]
-            fig.add_trace(go.Bar(
-                x=ohlcv["Date"], y=ohlcv["Volume"], name="Volume",
-                marker_color=vol_colors, opacity=0.55,
-            ), row=cur_row, col=1)
-            fig.update_yaxes(title_text="Volume", row=cur_row, col=1)
+            # MACD
+            if show_mac and "technical" in hist:
+                tec = hist["technical"]
+                if "macd_hist" in tec.columns:
+                    colors_mac = ["#00C896" if v >= 0 else "#FF3560" for v in tec["macd_hist"].fillna(0)]
+                    fig.add_trace(go.Bar(
+                        x=tec.index, y=tec["macd_hist"], name="MACD Hist",
+                        marker_color=colors_mac, opacity=0.75,
+                    ), row=cur_row, col=1)
+                    if "macd_line" in tec.columns:
+                        fig.add_trace(go.Scatter(
+                            x=tec.index, y=tec["macd_line"], name="MACD",
+                            line=dict(color="#2962FF", width=1.2),
+                        ), row=cur_row, col=1)
+                    if "macd_signal" in tec.columns:
+                        fig.add_trace(go.Scatter(
+                            x=tec.index, y=tec["macd_signal"], name="Signal",
+                            line=dict(color="#FFB020", width=1.2),
+                        ), row=cur_row, col=1)
+                    fig.update_yaxes(title_text="MACD", row=cur_row, col=1)
+                    cur_row += 1
 
-        layout_kw = dict(CHART_LAYOUT)
-        layout_kw.update(dict(
-            height=300 + 130 * (n_rows - 1),
-            title=f"{dd_ticker} — Price History",
-            xaxis_rangeslider_visible=False,
-            showlegend=True,
-        ))
-        fig.update_layout(**layout_kw)
-        fig.update_xaxes(type="date")
-        st.plotly_chart(fig, use_container_width=True)
+            # Volume
+            if show_vol:
+                vol_colors = [
+                    "#00C896" if ohlcv["Close"].iloc[i] >= ohlcv["Open"].iloc[i] else "#FF3560"
+                    for i in range(len(ohlcv))
+                ]
+                fig.add_trace(go.Bar(
+                    x=ohlcv["Date"], y=ohlcv["Volume"], name="Volume",
+                    marker_color=vol_colors, opacity=0.55,
+                ), row=cur_row, col=1)
+                fig.update_yaxes(title_text="Volume", row=cur_row, col=1)
 
-    # ── Analytics panels ────────────────────────────────────────────────
-    if hist:
-        st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
-        section_header("Analytics History")
+            layout_kw = dict(CHART_LAYOUT)
+            layout_kw.update(dict(
+                height=300 + 130 * (n_rows - 1),
+                title=f"{dd_ticker} — Price History",
+                xaxis_rangeslider_visible=False,
+                showlegend=True,
+            ))
+            fig.update_layout(**layout_kw)
+            fig.update_xaxes(type="date")
+            st.plotly_chart(fig, use_container_width=True)
 
-        panel_tabs = st.tabs(["Returns", "Risk", "Momentum", "Z-Scores", "Technical"])
+        # ── Analytics panels ────────────────────────────────────────────────
+        if hist:
+            st.markdown('<hr class="section-rule">', unsafe_allow_html=True)
+            section_header("Analytics History")
 
-        RETURNS_COLS = {
-            "ret_1d": "1d Ret", "ret_5d": "5d Ret",
-            "ret_21d": "21d Ret", "ret_63d": "63d Ret",
-            "ret_126d": "6m Ret", "ret_252d": "1yr Ret",
-        }
-        RISK_COLS = {
-            "vol_21d": "Vol 21d", "vol_63d": "Vol 63d", "vol_252d": "Vol 252d",
-            "sharpe_63d": "Sharpe 63d", "sharpe_252d": "Sharpe 252d",
-            "sortino_252d": "Sortino", "max_dd_252d": "MaxDD",
-            "beta_252d": "Beta", "alpha_252d": "Alpha",
-        }
-        MOM_COLS = {
-            "mom_1m": "1m", "mom_3m": "3m", "mom_6m": "6m", "mom_12m": "12m",
-            "hi_52w_pct": "52w Hi%", "lo_52w_pct": "52w Lo%",
-            "rs_vs_bench": "RS Bench",
-        }
-        Z_COLS = {
-            "z_price_21d": "Price Z 21d", "z_price_63d": "Price Z 63d",
-            "z_ret_21d": "Ret Z 21d", "z_cs_ret_1d": "CS Ret Z",
-            "pct_ret_1d": "Ret pct", "pct_mom_3m": "Mom3m pct",
-        }
-        TEC_COLS = {
-            "rsi_14": "RSI", "bb_pct_b": "BB %B", "bb_width": "BB Width",
-            "macd_hist": "MACD Hist", "pct_vs_ma50": "vs MA50",
-            "pct_vs_ma200": "vs MA200",
-        }
+            panel_tabs = st.tabs(["Returns", "Risk", "Momentum", "Z-Scores", "Technical"])
 
-        def _history_chart(panel_tab, module: str, cols_map: dict, title: str):
-            with panel_tab:
-                if module not in hist:
-                    st.info(f"No {module} history available.")
-                    return
-                df_h = hist[module]
-                available = {k: v for k, v in cols_map.items() if k in df_h.columns}
-                if not available:
-                    st.info("No columns available.")
-                    return
+            RETURNS_COLS = {
+                "ret_1d": "1d Ret", "ret_5d": "5d Ret",
+                "ret_21d": "21d Ret", "ret_63d": "63d Ret",
+                "ret_126d": "6m Ret", "ret_252d": "1yr Ret",
+            }
+            RISK_COLS = {
+                "vol_21d": "Vol 21d", "vol_63d": "Vol 63d", "vol_252d": "Vol 252d",
+                "sharpe_63d": "Sharpe 63d", "sharpe_252d": "Sharpe 252d",
+                "sortino_252d": "Sortino", "max_dd_252d": "MaxDD",
+                "beta_252d": "Beta", "alpha_252d": "Alpha",
+            }
+            MOM_COLS = {
+                "mom_1m": "1m", "mom_3m": "3m", "mom_6m": "6m", "mom_12m": "12m",
+                "hi_52w_pct": "52w Hi%", "lo_52w_pct": "52w Lo%",
+                "rs_vs_bench": "RS Bench",
+            }
+            Z_COLS = {
+                "z_price_21d": "Price Z 21d", "z_price_63d": "Price Z 63d",
+                "z_ret_21d": "Ret Z 21d", "z_cs_ret_1d": "CS Ret Z",
+                "pct_ret_1d": "Ret pct", "pct_mom_3m": "Mom3m pct",
+            }
+            TEC_COLS = {
+                "rsi_14": "RSI", "bb_pct_b": "BB %B", "bb_width": "BB Width",
+                "macd_hist": "MACD Hist", "pct_vs_ma50": "vs MA50",
+                "pct_vs_ma200": "vs MA200",
+            }
 
-                selected_cols = st.multiselect(
-                    "Metrics to display",
-                    options=list(available.values()),
-                    default=list(available.values())[:4],
-                    key=f"hist_{module}",
-                )
-                if not selected_cols:
-                    st.info("Select at least one metric.")
-                    return
+            def _history_chart(panel_tab, module: str, cols_map: dict, title: str):
+                with panel_tab:
+                    if module not in hist:
+                        st.info(f"No {module} history available.")
+                        return
+                    df_h = hist[module]
+                    available = {k: v for k, v in cols_map.items() if k in df_h.columns}
+                    if not available:
+                        st.info("No columns available.")
+                        return
 
-                rev_map = {v: k for k, v in available.items()}
-                sel_keys = [rev_map[c] for c in selected_cols if c in rev_map]
+                    selected_cols = st.multiselect(
+                        "Metrics to display",
+                        options=list(available.values()),
+                        default=list(available.values())[:4],
+                        key=f"hist_{module}",
+                    )
+                    if not selected_cols:
+                        st.info("Select at least one metric.")
+                        return
 
-                fig_h = go.Figure()
-                colors_cycle = ["#2962FF", "#00C896", "#FFB020", "#FF3560", "#9C27B0", "#00BCD4"]
-                for i, key in enumerate(sel_keys):
-                    fig_h.add_trace(go.Scatter(
-                        x=df_h.index,
-                        y=df_h[key],
-                        name=available[key],
-                        line=dict(color=colors_cycle[i % len(colors_cycle)], width=1.5),
-                    ))
+                    rev_map = {v: k for k, v in available.items()}
+                    sel_keys = [rev_map[c] for c in selected_cols if c in rev_map]
 
-                layout_h = dict(CHART_LAYOUT)
-                layout_h.update(height=320, title=title)
-                fig_h.update_layout(**layout_h)
-                st.plotly_chart(fig_h, use_container_width=True)
+                    fig_h = go.Figure()
+                    colors_cycle = ["#2962FF", "#00C896", "#FFB020", "#FF3560", "#9C27B0", "#00BCD4"]
+                    for i, key in enumerate(sel_keys):
+                        fig_h.add_trace(go.Scatter(
+                            x=df_h.index,
+                            y=df_h[key],
+                            name=available[key],
+                            line=dict(color=colors_cycle[i % len(colors_cycle)], width=1.5),
+                        ))
 
-        _history_chart(panel_tabs[0], "returns",  RETURNS_COLS, "Return History")
-        _history_chart(panel_tabs[1], "risk",     RISK_COLS,    "Risk History")
-        _history_chart(panel_tabs[2], "momentum", MOM_COLS,     "Momentum History")
-        _history_chart(panel_tabs[3], "zscore",   Z_COLS,       "Z-Score History")
-        _history_chart(panel_tabs[4], "technical",TEC_COLS,     "Technical History")
+                    layout_h = dict(CHART_LAYOUT)
+                    layout_h.update(height=320, title=title)
+                    fig_h.update_layout(**layout_h)
+                    st.plotly_chart(fig_h, use_container_width=True)
+
+            _history_chart(panel_tabs[0], "returns",  RETURNS_COLS, "Return History")
+            _history_chart(panel_tabs[1], "risk",     RISK_COLS,    "Risk History")
+            _history_chart(panel_tabs[2], "momentum", MOM_COLS,     "Momentum History")
+            _history_chart(panel_tabs[3], "zscore",   Z_COLS,       "Z-Score History")
+            _history_chart(panel_tabs[4], "technical",TEC_COLS,     "Technical History")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -771,7 +777,7 @@ with tab_compare:
             mom3m    = _safe(tr.get("mom_3m"))
             rs       = _safe(tr.get("rs_vs_bench"), 1.0)
             maxdd    = _safe(tr.get("max_dd_252d"))   # negative
-            rsi      = _safe(tr.get("rsi_14"), 50.0)
+            rsi_val  = _safe(tr.get("rsi_14"), 50.0)
 
             # Normalise to 0–1 scale for radar
             sharpe_n  = max(0.0, min(1.0, (sharpe + 1) / 4))
@@ -779,7 +785,7 @@ with tab_compare:
             mom3m_n   = max(0.0, min(1.0, (mom3m + 0.2) / 0.5))
             rs_n      = max(0.0, min(1.0, (rs - 0.5) / 1.0))
             dd_inv_n  = max(0.0, min(1.0, 1 + maxdd / 0.5))
-            rsi_n     = max(0.0, min(1.0, 1 - abs(rsi - 50) / 50))
+            rsi_n     = max(0.0, min(1.0, 1 - abs(rsi_val - 50) / 50))
 
             radar_data[t] = [sharpe_n, vol_inv_n, mom3m_n, rs_n, dd_inv_n, rsi_n]
 
@@ -788,15 +794,22 @@ with tab_compare:
             categories = list(radar_cols.values())
             colors_r = ["#2962FF", "#00C896", "#FFB020", "#FF3560", "#9C27B0",
                         "#00BCD4", "#FF7043", "#8BC34A", "#E91E63", "#607D8B"]
+
+            def _hex_rgba(hex_color: str, alpha: float) -> str:
+                h = hex_color.lstrip("#")
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return f"rgba({r},{g},{b},{alpha})"
+
             for i, (tkr, vals) in enumerate(radar_data.items()):
+                line_color = colors_r[i % len(colors_r)]
                 fig_r.add_trace(go.Scatterpolar(
                     r=vals + [vals[0]],
                     theta=categories + [categories[0]],
                     name=tkr,
-                    line=dict(color=colors_r[i % len(colors_r)], width=2),
+                    line=dict(color=line_color, width=2),
                     fill="toself",
-                    fillcolor=colors_r[i % len(colors_r)].replace("#", "rgba(") + ",0.06)",
-                    opacity=0.85,
+                    fillcolor=_hex_rgba(line_color, 0.10),
+                    opacity=0.9,
                 ))
             layout_r = dict(CHART_LAYOUT)
             layout_r.update(dict(

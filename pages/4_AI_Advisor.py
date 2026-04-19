@@ -46,34 +46,41 @@ if not api_key:
 user_risk = st.session_state.get("user_risk_profile")
 system    = get_system_prompt(user_risk=user_risk)
 
-# ── Sidebar ───────────────────────────────────────────────────────────
-if user_risk:
-    st.sidebar.markdown(
-        f'<div style="background:var(--green-dim);border:1px solid rgba(0,200,150,.25);'
-        f'border-radius:10px;padding:.7rem 1rem;margin-bottom:1rem;">'
-        f'<div style="color:var(--green);font-weight:700;font-size:.82rem;">RISK PROFILE LOADED</div>'
-        f'<div style="color:var(--text);font-size:1.4rem;font-weight:800;font-family:var(--mono);">'
-        f'{user_risk}/5</div>'
-        f'<div style="color:var(--text-2);font-size:.75rem;">Advisor context is active</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-else:
-    st.sidebar.markdown(
-        '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;'
-        'padding:.7rem 1rem;margin-bottom:1rem;font-size:.82rem;color:var(--text-2);">'
-        '💡 Run <b>Risk Profiler</b> first to give the advisor your risk context.'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+# ── Inline top bar: risk badge + clear chat ───────────────────────────
+top_left, top_right = st.columns([3, 1])
 
-st.sidebar.markdown("### Session")
-if st.sidebar.button("Clear Chat", type="secondary"):
-    st.session_state.advisor_messages = []
-    st.session_state.pop("mc_ran", None)
-    st.rerun()
+with top_left:
+    if user_risk:
+        RISK_LABELS = {1: "Conservative", 2: "Moderately Conservative", 3: "Moderate",
+                       4: "Moderately Aggressive", 5: "Aggressive"}
+        risk_label = RISK_LABELS.get(user_risk, "")
+        st.markdown(
+            f'<div style="background:var(--green-dim);border:1px solid rgba(0,200,150,.25);'
+            f'border-radius:10px;padding:.6rem 1rem;display:inline-flex;align-items:center;gap:12px;">'
+            f'<span style="color:var(--green);font-weight:700;font-size:.82rem;">RISK PROFILE LOADED</span>'
+            f'<span style="color:var(--text);font-size:1.3rem;font-weight:800;font-family:var(--mono);">{user_risk}/5</span>'
+            f'<span style="color:var(--text-2);font-size:.78rem;">{risk_label} · Advisor context active</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;'
+            'padding:.6rem 1rem;font-size:.84rem;color:var(--text-2);display:inline-block;">'
+            '💡 Run the <b>Risk Profiler</b> first to give the advisor your risk context.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-st.sidebar.markdown("### Example Questions")
+with top_right:
+    if st.button("Clear Chat", type="secondary", use_container_width=True):
+        st.session_state.advisor_messages = []
+        st.session_state.pop("mc_ran", None)
+        st.rerun()
+
+st.markdown("<div style='margin:.6rem 0;'></div>", unsafe_allow_html=True)
+
+# ── Example questions (inline chips) ─────────────────────────────────
 examples = [
     "What's the safest fund for a 60-year-old retiree?",
     "Compare Fund 3 vs Fund 5 for moderate risk",
@@ -82,12 +89,15 @@ examples = [
     "How should I diversify across the five funds?",
     "What is Geometric Brownian Motion?",
 ]
-for ex in examples:
-    if st.sidebar.button(ex, key=f"ex_{ex[:20]}", type="secondary"):
-        if "advisor_messages" not in st.session_state:
-            st.session_state.advisor_messages = []
-        st.session_state.advisor_messages.append({"role": "user", "content": ex})
-        st.rerun()
+
+with st.expander("Example questions — click any to ask", expanded=False):
+    eq_cols = st.columns(3)
+    for i, ex in enumerate(examples):
+        if eq_cols[i % 3].button(ex, key=f"ex_{i}", use_container_width=True):
+            if "advisor_messages" not in st.session_state:
+                st.session_state.advisor_messages = []
+            st.session_state.advisor_messages.append({"role": "user", "content": ex})
+            st.rerun()
 
 # ── Chat ──────────────────────────────────────────────────────────────
 if "advisor_messages" not in st.session_state:

@@ -24,3 +24,4 @@ models/risk_model.pkl
 .vscode/
 *.code-workspace
 .claude/
+data_cache/

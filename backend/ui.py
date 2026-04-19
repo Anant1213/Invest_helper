@@ -8,6 +8,9 @@ Call apply_styles() at the top of every page.
 from __future__ import annotations
 import streamlit as st
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()   # ensure .env is loaded for every page that imports this module
 
 # ── Plotly chart defaults ─────────────────────────────────────────────
 CHART_LAYOUT = dict(
@@ -416,14 +419,28 @@ def apply_styles() -> None:
 
 def page_header(title: str, subtitle: str = "", badge: str = "") -> None:
     badge_html = f'<span class="ae-badge">{badge}</span>' if badge else ""
+    subtitle_html = f'<div class="ae-subtitle">{subtitle}</div>' if subtitle else ""
     st.html(
         f"""
-        <div class="ae-header">
-          <div class="ae-header-top">
-            <span class="ae-title">{title}</span>
-            {badge_html}
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:.25rem;">
+          <a href="/" target="_self"
+             style="display:inline-flex;align-items:center;justify-content:center;
+                    background:var(--bg-card);border:1px solid var(--border);
+                    border-radius:10px;padding:.38rem .65rem;
+                    font-family:var(--mono);font-weight:800;font-size:.85rem;
+                    color:var(--accent);letter-spacing:.04em;line-height:1;
+                    text-decoration:none;flex-shrink:0;
+                    transition:border-color .2s,box-shadow .2s;"
+             onmouseover="this.style.borderColor='var(--accent)';this.style.boxShadow='0 0 14px var(--accent-glow)'"
+             onmouseout="this.style.borderColor='var(--border)';this.style.boxShadow='none'"
+             title="Back to Home">AE</a>
+          <div class="ae-header" style="margin:0;flex:1;">
+            <div class="ae-header-top">
+              <span class="ae-title">{title}</span>
+              {badge_html}
+            </div>
+            {subtitle_html}
           </div>
-          {'<div class="ae-subtitle">' + subtitle + '</div>' if subtitle else ''}
         </div>
         """
     )

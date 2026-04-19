@@ -57,6 +57,10 @@ if predict_btn:
     result = predict_risk(age, annual_income, dependents, marital,
                           horizon, loss_tol, exp_val, employment)
     st.session_state["user_risk_profile"] = result["risk_profile"]
+    st.session_state["risk_result"] = result
+
+result = st.session_state.get("risk_result")
+if result:
 
     st.markdown("---")
     section_header("Risk Assessment")
